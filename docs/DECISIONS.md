@@ -59,7 +59,9 @@
 
 **Riesgo asumido conscientemente:** la evidencia histórica dice que nadie expandió pilares en el año 1 — Snyk tardó 5 años (y compró la empresa), Vanta 3, Datadog 7, Sentry 12. Se decidió igual construir completo con un agente orquestador coordinando especialistas.
 
-**Mitigación:** cada subsistema se especifica y verifica independientemente antes de integrar, para no descubrir tarde que el formato video no convence.
+**Por qué el riesgo es aceptable acá:** el downside está acotado. En el peor caso — el video no convence como diferenciador de venta — el producto sigue teniendo valor real como **herramienta interna** para uso propio y del equipo: los tres pilares de auditoría (seguridad, completitud, higiene de tienda) funcionan solos, sin depender de que el formato video sea la pieza ganadora. No es "todo o nada" en el sentido de negocio, aunque sí lo sea en el sentido de tiempo de construcción.
+
+**Mitigación técnica que sigue en pie:** cada subsistema se especifica y verifica independientemente antes de integrar (ver Ola 4 en `MASTER_PLAN.md`), para saber temprano si el formato video convence — no para decidir si vale la pena construir el resto, sino para decidir si el video se sigue puliendo como diferenciador o el valor principal termina siendo la auditoría en sí.
 
 ---
 

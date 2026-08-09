@@ -17,6 +17,8 @@
 ### Regla de oro de la construcción
 
 > **Vertical antes que horizontal.** Un hallazgo completo de punta a punta (detectar → agente lo demuestra → video narrado → prompt de arreglo) tiene que funcionar **antes** de ensanchar a los tres pilares. Si el formato video no convence, hay que saberlo temprano, no al final.
+>
+> Esto **no** es una decisión de "construir menos". El alcance completo se construye igual (decisión del usuario: en el peor caso, es una herramienta interna para uso propio y del equipo, y ahí los tres pilares valen por sí solos aunque el video no termine siendo el diferenciador de venta). Es una decisión de **orden**: probar temprano la pieza más incierta para poder ajustar el resto del plan con esa información, no para frenar la construcción.
 
 ---
 
