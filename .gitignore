@@ -1,0 +1,62 @@
+# Dependencias
+node_modules/
+.pnp
+.pnp.js
+
+# Build
+.next/
+out/
+build/
+dist/
+
+# Entorno — NUNCA commitear
+.env
+.env*.local
+.env.production
+*.pem
+*.key
+
+# Vercel
+.vercel
+
+# Testing
+coverage/
+*.lcov
+playwright-report/
+test-results/
+
+# Supabase local
+.branches
+.temp
+supabase/.temp
+
+# TypeScript
+*.tsbuildinfo
+next-env.d.ts
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Sistema
+.DS_Store
+Thumbs.db
+
+# Editores
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Artefactos de trabajo locales
+.remember/
+scratchpad/
+tmp/
+
+# Media generada (no versionar renders ni grabaciones)
+*.mp4
+*.webm
+*.mov
+!docs/assets/**
