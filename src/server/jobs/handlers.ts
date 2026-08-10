@@ -24,15 +24,35 @@
 
 let loaded = false
 
+/**
+ * Cada import va envuelto: si el módulo de un frente no carga en este entorno
+ * —pasó de verdad, con Playwright en Vercel: `browsers.json` no viaja en el
+ * paquete de la función serverless— eso no puede tirar abajo **todo** el tick.
+ * Sin este try/catch, un solo `import()` que revienta corta la cola entera:
+ * ni siquiera los trabajos de los demás frentes llegan a correr, un minuto sí
+ * y otro también, hasta que alguien lo note.
+ */
+async function importarSinRomperElResto(ruta: string, cargar: () => Promise<unknown>): Promise<void> {
+  try {
+    await cargar()
+  } catch (error) {
+    console.error(
+      `[jobs] no se pudo cargar "${ruta}": sus trabajos van a fallar con "handler no registrado", pero el resto de la cola sigue andando. ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    )
+  }
+}
+
 export async function registerAllHandlers(): Promise<void> {
   if (loaded) return
   loaded = true
 
   // ── Agregá acá el import de tu módulo de handlers ──────────────────────
-  await import('@/server/ingest/handlers')
-  await import('@/server/analysis/handlers')
-  await import('@/server/checks/handlers')
-  await import('@/server/agent/handlers')
-  await import('@/server/video/handlers')
-  await import('@/server/comments/handlers')
+  await importarSinRomperElResto('ingest', () => import('@/server/ingest/handlers'))
+  await importarSinRomperElResto('analysis', () => import('@/server/analysis/handlers'))
+  await importarSinRomperElResto('checks', () => import('@/server/checks/handlers'))
+  await importarSinRomperElResto('agent', () => import('@/server/agent/handlers'))
+  await importarSinRomperElResto('video', () => import('@/server/video/handlers'))
+  await importarSinRomperElResto('comments', () => import('@/server/comments/handlers'))
 }

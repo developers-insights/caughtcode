@@ -5,5 +5,11 @@
       "path": "/api/worker/tick",
       "schedule": "* * * * *"
     }
-  ]
+  ],
+  "functions": {
+    "src/app/api/worker/tick/route.ts": {
+      "memory": 3009,
+      "maxDuration": 300
+    }
+  }
 }
