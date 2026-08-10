@@ -13,6 +13,7 @@
 - **Para probar RLS no hace falta crear usuarios.** Se simulan los claims del JWT dentro de una transacción con `ROLLBACK`. No escribe nada, funciona en plan Free. Es la técnica estándar de testeo de RLS en Postgres.
 - **Leer el schema de la DB real, no los archivos de migración.** `pg_policies` e `information_schema` reflejan el estado aplicado; el SQL del repo refleja la intención, que puede diferir.
 - `get_advisors` (security + performance) después de **cada** migración. No es opcional.
+- **En `rls.sql`, ningún `count(*)` puede asumir base vacía.** El seed corre como `postgres` (sin RLS) en la sección 1, así que un `count(*) from organizations_caughtcode` global cuenta también las organizaciones de producción reales. Hay que filtrar por los ids sembrados (`owner_user_id in (...)`). Los `count(*)` de las secciones 2+ (bajo `role authenticated`) no tienen este problema porque las policies ya acotan el resultado a lo que ve ese usuario.
 
 ### Análisis de código
 

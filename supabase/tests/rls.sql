@@ -74,9 +74,11 @@ begin
   if v_otra_vez <> v_org_a then
     raise exception 'FALLÓ: ensure_org_caughtcode no es idempotente, creó una segunda organización.';
   end if;
-  if (select count(*) from public.organizations_caughtcode) <> 2 then
-    raise exception 'FALLÓ: quedaron % organizaciones en vez de 2.',
-      (select count(*) from public.organizations_caughtcode);
+  if (select count(*) from public.organizations_caughtcode
+        where owner_user_id in ('aaaaaaaa-0000-4000-8000-00000000000a', 'bbbbbbbb-0000-4000-8000-00000000000b')) <> 2 then
+    raise exception 'FALLÓ: quedaron % organizaciones de los usuarios sembrados en vez de 2.',
+      (select count(*) from public.organizations_caughtcode
+        where owner_user_id in ('aaaaaaaa-0000-4000-8000-00000000000a', 'bbbbbbbb-0000-4000-8000-00000000000b'));
   end if;
 
   if not exists (
