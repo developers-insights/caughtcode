@@ -77,9 +77,13 @@ function appFalsa(
   return {
     bajadas,
     instalacionesPedidas: 0,
-    async listarInstalaciones() {
+    async buscarInstalacionDeLaOrg(_orgId: string, owner: string) {
       this.instalacionesPedidas += 1
-      return opciones.instalaciones ?? [{ id: 152524864, accountLogin: 'developers-insights' }]
+      const propias = opciones.instalaciones ?? [
+        { id: 152524864, accountLogin: 'developers-insights' },
+      ]
+      const buscado = owner.trim().toLowerCase()
+      return propias.find((i) => i.accountLogin.toLowerCase() === buscado) ?? null
     },
     async resolverRef(target) {
       if (opciones.fallaCon) throw opciones.fallaCon

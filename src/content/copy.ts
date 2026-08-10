@@ -145,6 +145,45 @@ export const ONBOARDING = {
       texto: 'Arrastrá la carpeta de tu proyecto comprimida. No hace falta tener cuenta de GitHub.',
     },
   },
+  /**
+   * Lo que ve el usuario al volver de GitHub, después de elegir a qué
+   * repositorios nos da acceso. Cada clave es un resultado posible del retorno.
+   */
+  vueltaDeGithub: {
+    conectado: {
+      tono: 'ok' as const,
+      texto: 'Listo, ya podemos leer los repositorios que elegiste. Elegí cuál querés revisar.',
+    },
+    pendiente: {
+      tono: 'aviso' as const,
+      texto:
+        'Pediste el acceso, pero falta que lo apruebe quien administra esa cuenta en GitHub. Cuando lo haga, los repositorios aparecen acá solos.',
+    },
+    ya_conectada: {
+      tono: 'aviso' as const,
+      texto:
+        'Esa cuenta de GitHub ya está conectada a otro equipo. Si es tuya y la querés mover, escribinos y lo resolvemos.',
+    },
+    sin_instalacion: {
+      tono: 'aviso' as const,
+      texto: 'No llegamos a recibir la conexión. Probá de nuevo desde el botón de acá abajo.',
+    },
+    otra_sesion: {
+      tono: 'aviso' as const,
+      texto:
+        'Ese enlace lo empezó otra cuenta. Volvé a conectar GitHub desde acá para que quede a nombre de tu equipo.',
+    },
+    sin_github: {
+      tono: 'error' as const,
+      texto:
+        'La conexión con GitHub todavía no está disponible. Subí tu proyecto como archivo zip y funciona igual.',
+    },
+    error: {
+      tono: 'error' as const,
+      texto:
+        'Algo falló de nuestro lado al conectar con GitHub. Podés reintentar, o subir tu proyecto como archivo zip mientras tanto.',
+    },
+  },
   erroresDeRepositorio: {
     direccionInvalida:
       'Esa no parece una dirección de GitHub. Copiala de la barra del navegador: tiene la forma github.com/tu-usuario/tu-proyecto',

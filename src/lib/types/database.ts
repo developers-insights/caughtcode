@@ -98,6 +98,32 @@ export type ProjectConnectionRow = {
   created_at: string
 }
 
+/**
+ * Qué instalación de la GitHub App pertenece a qué organización (migración 0015).
+ *
+ * Existe aparte de `ProjectConnectionRow` porque responde otra pregunta: aquella
+ * dice "con qué credencial entro a ESTE proyecto", esta dice "de quién es esta
+ * instalación". La segunda hace falta ANTES de que el proyecto exista — el
+ * asistente lista instalaciones para poder listar repositorios — y una misma
+ * instalación sirve para muchos proyectos.
+ */
+export type GithubInstallationRow = {
+  /** Id de la instalación en GitHub. Es la clave primaria: una instalación, una organización. */
+  installation_id: number
+  org_id: string
+  account_login: string
+  account_type: string
+  /** Id numérico de la cuenta en GitHub. Sobrevive a que la cuenta se renombre. */
+  account_id: number | null
+  all_repositories: boolean
+  /** Quién completó la instalación. Informativo: el permiso lo da la organización. */
+  installed_by: string | null
+  created_at: string
+  updated_at: string
+  /** Baja lógica: se desinstaló o dejó de estar viva, pero queda el registro. */
+  removed_at: string | null
+}
+
 export type AnalysisRunRow = {
   id: string
   project_id: string
@@ -351,6 +377,20 @@ export type Database = {
             columns: ['project_id']
             isOneToOne: false
             referencedRelation: 'projects_caughtcode'
+            referencedColumns: ['id']
+          },
+        ]
+      }
+      github_installations_caughtcode: {
+        Row: GithubInstallationRow
+        Insert: Insertable<GithubInstallationRow, 'installation_id' | 'org_id' | 'account_login'>
+        Update: Updatable<GithubInstallationRow>
+        Relationships: [
+          {
+            foreignKeyName: 'github_installations_caughtcode_org_id_fkey'
+            columns: ['org_id']
+            isOneToOne: false
+            referencedRelation: 'organizations_caughtcode'
             referencedColumns: ['id']
           },
         ]

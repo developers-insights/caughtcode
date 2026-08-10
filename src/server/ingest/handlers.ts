@@ -110,8 +110,17 @@ export interface AlmacenRepos {
  * clave privada, sin instalación y sin salir a la red.
  */
 export interface AccesoGithubApp {
-  /** Instalaciones que la App tiene hoy. Se usa solo si el proyecto no dejó la suya guardada. */
-  listarInstalaciones(): Promise<Array<{ id: number; accountLogin: string }>>
+  /**
+   * La cuenta de GitHub conectada **por esta organización** que sea dueña de
+   * `owner`. `null` si el equipo no conectó ninguna que sirva.
+   *
+   * Toma `orgId` a propósito: buscar en la lista global de instalaciones sería
+   * prestarle a un equipo el permiso de otro.
+   */
+  buscarInstalacionDeLaOrg(
+    orgId: string,
+    owner: string,
+  ): Promise<{ id: number; accountLogin: string } | null>
   /** Qué rama y qué commit exacto vamos a analizar. Es lo que fecha la evidencia. */
   resolverRef(target: RepoRef): Promise<{ ref: string; sha: string }>
   bajarArchivo(target: RepoRef): Promise<Uint8Array>
@@ -174,13 +183,10 @@ async function descifrarPorDefecto(credencial: string): Promise<string> {
  * en los tests no existen, y no hacen falta hasta que de verdad se usa.
  */
 export const githubAppReal: AccesoGithubApp = {
-  async listarInstalaciones() {
-    const { listInstallations } = await import('./github')
-    const instalaciones = await listInstallations()
-    return instalaciones.map((instalacion) => ({
-      id: instalacion.id,
-      accountLogin: instalacion.accountLogin,
-    }))
+  async buscarInstalacionDeLaOrg(orgId, owner) {
+    const { findOrgInstallationForOwner } = await import('./github')
+    const instalacion = await findOrgInstallationForOwner(orgId, owner)
+    return instalacion ? { id: instalacion.id, accountLogin: instalacion.accountLogin } : null
   },
   async resolverRef(target) {
     const { resolveRef } = await import('./github')
@@ -622,9 +628,15 @@ function porQueFallo(origen: OrigenCodigo, error: unknown): string {
  * Con qué instalación de la GitHub App entramos a este repositorio.
  *
  * Primero la que el proyecto dejó guardada al conectarse: es la que el usuario
- * eligió. Si no está —o quedó ilegible— se busca entre las instalaciones vivas
- * la de la cuenta dueña del repositorio. Adivinar cualquier otra sería usar el
- * permiso de una cuenta para entrar a otra.
+ * eligió. Si no está —o quedó ilegible— se busca **entre las instalaciones de
+ * esta organización** la de la cuenta dueña del repositorio.
+ *
+ * Que la búsqueda sea por organización y no global es lo único que separa esto
+ * de una fuga entre clientes: `authenticated` puede insertar filas en
+ * `projects_caughtcode`, así que cualquiera podría crear un proyecto apuntando
+ * al repositorio privado de otra empresa y, si acá buscáramos en la lista
+ * completa de instalaciones, el worker le prestaría un permiso ajeno sin que
+ * nadie lo note. Es exactamente el tipo de falla que este producto audita.
  */
 async function conseguirInstalacion(
   db: JobsDb,
@@ -637,29 +649,25 @@ async function conseguirInstalacion(
   const guardada = await leerConexionGithub(db, projectId, ctx, descifrarGithub)
   if (guardada) return guardada.installationId
 
-  let instalaciones: Array<{ id: number; accountLogin: string }>
+  let propia: { id: number; accountLogin: string } | null
   try {
-    instalaciones = await github.listarInstalaciones()
+    propia = await github.buscarInstalacionDeLaOrg(ctx.orgId, destino.owner)
   } catch (error) {
     throw traducirErrorDeApp(error, destino)
   }
 
-  const duena = destino.owner.toLowerCase()
-  const propia = instalaciones.find(
-    (instalacion) => instalacion.accountLogin.toLowerCase() === duena,
-  )
   if (propia) {
     ctx.log(`Entramos a ${destino.owner}/${destino.repo} con el acceso de ${propia.accountLogin}.`)
     return propia.id
   }
 
-  // Sin instalación de esa cuenta no hay forma de entrar. La causa es de
+  // Sin instalación propia de esa cuenta no hay forma de entrar. La causa es de
   // permisos, así que el texto y el "no reintentar" salen del mismo lugar que
   // el resto de los errores de repositorio.
   throw new PublicRepoError(
     'privado',
-    `Ninguna instalación de la GitHub App tiene acceso a ${destino.owner}/${destino.repo}. ` +
-      `Instalaciones vistas: ${instalaciones.length}.`,
+    `Tu equipo no tiene conectada ninguna cuenta de GitHub con acceso a ` +
+      `${destino.owner}/${destino.repo}.`,
   )
 }
 

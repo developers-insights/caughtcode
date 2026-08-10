@@ -28,6 +28,8 @@ export const T = {
   orgMembers: 'org_members_caughtcode',
   projects: 'projects_caughtcode',
   projectConnections: 'project_connections_caughtcode',
+  /** Qué instalación de la GitHub App es de qué organización. Ver migración 0015. */
+  githubInstallations: 'github_installations_caughtcode',
   analysisRuns: 'analysis_runs_caughtcode',
   codeIndex: 'code_index_caughtcode',
   findings: 'findings_caughtcode',

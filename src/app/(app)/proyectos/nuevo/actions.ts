@@ -32,9 +32,11 @@ import {
   downloadPublicRepoArchive,
   downloadRepoArchive,
   encodeConnection,
+  encodeInstallState,
   githubStatus,
+  installationBelongsToOrg,
   listInstallationRepos,
-  listInstallations,
+  listOrgInstallations,
   parseGithubUrl,
   resolveRef,
   type GithubInstallation,
@@ -171,7 +173,8 @@ export interface GithubStatusResult {
 }
 
 export async function getGithubStatusAction(): Promise<GithubStatusResult> {
-  const status = githubStatus()
+  const { org } = await requireSession()
+  const status = githubStatus({ state: encodeInstallState(org.id) })
   return { ready: status.ready, message: status.message, installUrl: status.installUrl }
 }
 
@@ -179,9 +182,20 @@ export type GithubInstallationsResult =
   | { ok: true; installations: GithubInstallation[] }
   | { ok: false; error: string }
 
+/**
+ * Las cuentas de GitHub conectadas **por este equipo**.
+ *
+ * Antes esto devolvía `listInstallations()` a secas: todas las instalaciones de
+ * la GitHub App, de todas las cuentas registradas. Con una sola cuenta no se
+ * notaba; con dos, cada persona veía en su desplegable las cuentas de las demás y
+ * podía entrar a repositorios privados ajenos. Ahora sale de
+ * `listOrgInstallations(org.id)`, y el `org.id` lo resuelve el servidor desde la
+ * sesión — no hay parámetro que el navegador pueda cambiar.
+ */
 export async function listGithubInstallationsAction(): Promise<GithubInstallationsResult> {
+  const { org } = await requireSession()
   try {
-    const installations = await listInstallations()
+    const installations = await listOrgInstallations(org.id)
     return { ok: true, installations }
   } catch (error) {
     if (error instanceof GithubNotConfiguredError) return { ok: false, error: error.message }
@@ -191,7 +205,24 @@ export async function listGithubInstallationsAction(): Promise<GithubInstallatio
 
 export type GithubReposResult = { ok: true; repos: GithubRepo[] } | { ok: false; error: string }
 
+/**
+ * Texto para cuando llega un `installationId` que no es de esta organización.
+ *
+ * No dice "no tenés permiso sobre esa instalación" ni menciona que exista: quien
+ * mandó un id ajeno a propósito no tiene por qué recibir confirmación de que
+ * acertó, y quien llegó acá por un error nuestro no entendería la frase igual.
+ */
+const CUENTA_AJENA = 'Esa cuenta de GitHub no está conectada a tu equipo. Elegí una de la lista.'
+
 export async function listGithubReposAction(installationId: number): Promise<GithubReposResult> {
+  const { org } = await requireSession()
+
+  // El id viene del navegador. Que haya salido de un desplegable filtrado no
+  // prueba nada: el pedido se puede armar a mano.
+  if (!(await installationBelongsToOrg(installationId, org.id))) {
+    return { ok: false, error: CUENTA_AJENA }
+  }
+
   try {
     const repos = await listInstallationRepos(installationId)
     return { ok: true, repos }
@@ -213,6 +244,14 @@ export async function createProjectFromGithubAction(
 ): Promise<CreateProjectResult> {
   const { supabase, org } = await requireSession()
   if (!supabase) return { ok: false, error: 'No pudimos verificar tu sesión. Volvé a entrar.' }
+
+  // Antes de tocar la red: ¿esta instalación es de este equipo? Sin este
+  // chequeo, mandar el número a mano alcanza para bajarse el código de un
+  // repositorio privado de otra organización. Va primero a propósito — no se
+  // sale a GitHub con una credencial ajena ni para "ver si anda".
+  if (!(await installationBelongsToOrg(input.installationId, org.id))) {
+    return { ok: false, error: CUENTA_AJENA }
+  }
 
   let ref: { ref: string; sha: string }
   let bytes: Uint8Array
