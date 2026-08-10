@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <!-- clave: sk_live_51H8xQ2LkJhGf3nQpZrTuVwXy -->
+    <style>
+      /* comentario dentro de style */
+      body { margin: 0; }
+      .x::before { content: "<!-- no soy comentario -->"; }
+    </style>
+    <script>
+      // comentario dentro de script
+      const s = "<!-- tampoco soy comentario -->"
+      console.log(s)
+    </script>
+  </head>
+  <body>
+    <!-- TODO: sacar el banner de prueba -->
+    <p>Hola <!-- inline --> mundo</p>
+  </body>
+</html>

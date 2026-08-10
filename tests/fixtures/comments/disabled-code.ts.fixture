@@ -1,0 +1,11 @@
+export function activo(n: number) {
+  return n + 1
+}
+
+// export function viejo(n: number) {
+//   const a = calcular(n, 2)
+//   return a * 2
+// }
+
+// Esta funcion quedo vieja cuando cambiamos el calculo.
+// La dejamos por las dudas, pero no se usa mas en ningun lado.

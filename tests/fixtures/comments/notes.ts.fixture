@@ -1,0 +1,11 @@
+// no tocar: el cliente no sabe que esto esta hardcodeado
+// staging: http://192.168.1.44:3000/admin
+// preguntar a Sofia antes de cambiar el orden
+
+export const LIMITE = 25
+
+// FIXME: esto revienta con mas de mil filas
+export const PAGINA = 50
+
+// Este modulo agrupa constantes de la app.
+export const NOMBRE = 'caughtcode'

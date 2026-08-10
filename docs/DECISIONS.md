@@ -148,20 +148,32 @@ ElevenLabs es **5-10x más caro**. Además **Azure tiene voces es-AR específica
 
 ---
 
-## D11 — Motor de video: pendiente, con sesgo hacia Motion Canvas
+## D11 — Motor de video: HTML + Playwright + ffmpeg. CERRADA (2026-08-09)
 
-**Estado: DECISIÓN ABIERTA.** Resolver con un prototipo de una escena real con código animado.
+**Decisión:** el motor es una **página HTML animada con CSS, grabada con Playwright y mezclada con ffmpeg**. Ni Motion Canvas ni Remotion. `remotion` queda reservado como implementación alternativa detrás de `VIDEO_RENDERER=remotion`, sin implementar.
 
-**Remotion:**
-- Gratis solo hasta 3 empleados. Tier "Automators": $0.01/render con **mínimo $100/mes**
-- **Zona gris legal**: la licencia permite "un servicio que genera código Remotion con IA y lo renderiza", pero exige aprobación escrita para que terceros rendericen sus propios proyectos. Nuestro caso está del lado bueno, pero conviene confirmarlo por escrito antes de escalar
-- Render Lambda: ~$0.0105/min en composiciones simples. **Sin benchmark público para código animado** — presupuestar 2-4x hasta medirlo
+**Por qué la pregunta original estaba mal planteada:** Motion Canvas y Remotion son motores de *composición* de escenas. Nosotros casi no componemos: cerca del 70% del clip **es la grabación del agente**. Lo que hay que hacer es recortar, acercar, señalar y narrar. Eso no necesita un motor de animación, necesita un recorte y un encuadre.
 
-**Motion Canvas:** MIT, sin problema de licencia, **componente de cámara nativo** para zoom/dim, diseñado explícitamente para sincronizar con voiceover. Contra: no hay ecosistema de componentes React equivalente, más ingeniería.
+**Lo que decidió, en orden de peso:**
 
-**Revideo:** MIT, fork de Motion Canvas pensado para pipelines automatizados/headless.
+1. **Licencia: cero riesgo.** Remotion exige aprobación escrita para que terceros rendericen sus proyectos, y el tier que nos tocaría tiene piso de US$100/mes. Nuestro caso probablemente cae del lado bueno, pero "probablemente" no es base para facturar.
+2. **Los tokens de la app son los del video.** La escena lee `src/styles/tokens.css`. El rojo del clip no se *parece* al rojo de la interfaz: es la misma variable. Con un motor de video habría dos paletas que mantener en sincronía, y se iban a desincronizar.
+3. **Cero dependencias nuevas.** Playwright y ffmpeg ya estaban instalados.
+4. **Lo edita el frente de diseño.** Es CSS, no una API de animación imperativa.
 
----
+**Lo que se resigna:** render determinista fotograma a fotograma. Playwright graba en tiempo real, así que un pico de carga puede tirar cuadros. Se compensa normalizando a 30 fps constantes en la mezcla. La sincronía con la voz **no** depende del render: audio, subtítulos y línea de tiempo leen los mismos offsets calculados una sola vez en `timing.ts`.
+
+**Costo medido** (3 clips, `scripts/medir-cogs.ts`, MacBook local, sin voz):
+
+| Etapa | Costo por clip |
+|---|---|
+| Render + mezcla | US$ 0,06 |
+| Voz (638 caracteres, proyectado a Azure Neural) | ~US$ 0,01 |
+| Guion (modelo) | pendiente de medir con LLM real |
+
+El render tarda **1,13x** lo que dura el clip. `RENDER_COMPUTE_MINUTES_PER_VIDEO_SECOND` medido: **0,01884** (en `pricing.ts` figura 0,08 como ESTIMADO — sobreestima 4x).
+
+**Cómo revertirla si aparece un motivo:** la interfaz `VideoRenderer` (`src/server/video/renderer.ts`) separa "qué clip hay que hacer" de "con qué se hace". Cambiar de motor es escribir `render/remotion.ts` y cambiar una variable de entorno — pero primero hay que resolver la licencia.
 
 ## D12 — Duración: clips de 60-90 segundos
 
@@ -262,7 +274,7 @@ En auditorías SEO el patrón es idéntico: *"cuando el cliente ve cientos de fi
 | **Vibe App Scanner** con 8 pilares a $19/mes | Activo |
 | **Midrender (YC)** hace "codebase → walkthrough animado" con MCP a Claude Code/Cursor. Hoy lo posicionan para marketing, el pivot les cuesta nada | Activo |
 | **La gente no compra prevención.** Solo 49-63% aumenta el gasto en seguridad incluso *después* de una brecha | Activo — aprovechar el miedo ambiental fresco, es una ventana que se cierra |
-| Licencia de Remotion sin confirmar por escrito | Abierto (ver D11) |
+| Licencia de Remotion sin confirmar por escrito | Cerrado: no usamos Remotion (ver D11) |
 | COGS de render sin medir | Abierto (ver D16) |
 
 ---

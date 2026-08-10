@@ -1,0 +1,71 @@
+{
+  "name": "caughtcode",
+  "version": "0.1.0",
+  "private": true,
+  "engines": {
+    "node": ">=20.9.0"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "worker": "tsx --conditions=react-server --env-file-if-exists=.env.local scripts/worker.ts",
+    "db:push": "supabase db push",
+    "db:types:diff": "supabase gen types typescript --linked > /tmp/caughtcode-db-types.ts && diff -u src/lib/types/database.ts /tmp/caughtcode-db-types.ts || true",
+    "db:test": "psql \"$SUPABASE_DB_URL\" -f supabase/tests/rls.sql"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.116.0",
+    "@octokit/auth-app": "^8.3.0",
+    "@octokit/rest": "^22.0.1",
+    "@supabase/ssr": "^0.12.4",
+    "@supabase/supabase-js": "^2.112.2",
+    "clsx": "^2.1.1",
+    "fflate": "^0.8.3",
+    "ffmpeg-static": "^5.3.0",
+    "lucide-react": "^1.30.0",
+    "motion": "^13.0.0",
+    "nanoid": "^6.0.1",
+    "next": "^16.3.0",
+    "p-limit": "^7.3.1",
+    "pg": "^8.23.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "server-only": "^0.0.1",
+    "sonner": "^2.0.7",
+    "stripe": "^22.4.0",
+    "tailwind-merge": "^3.6.0",
+    "tree-sitter-wasms": "^0.1.13",
+    "typescript": "^7.0.2",
+    "web-tree-sitter": "^0.20.8",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@eslint/eslintrc": "^3.3.6",
+    "@tailwindcss/postcss": "^4.3.3",
+    "@types/node": "^26.2.0",
+    "@types/pg": "^8.21.0",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "eslint": "^10.8.1",
+    "eslint-config-next": "^16.3.0",
+    "playwright": "^1.62.1",
+    "postcss": "^8.5.26",
+    "tailwindcss": "^4.3.3",
+    "tsx": "^4.23.11",
+    "vitest": "^4.1.10"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "ffmpeg-static",
+      "unrs-resolver",
+      "sharp",
+      "@tailwindcss/oxide"
+    ]
+  }
+}

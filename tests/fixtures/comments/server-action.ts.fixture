@@ -1,0 +1,13 @@
+/**
+ * Devuelve los proyectos del usuario.
+ * @param id identificador del usuario
+ * @returns las filas encontradas
+ */
+export async function getProjects(id: string) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const rows: any[] = await query(id)
+  // TODO: paginar esto antes de salir a produccion
+  return rows
+}
+
+declare function query(id: string): Promise<unknown[]>

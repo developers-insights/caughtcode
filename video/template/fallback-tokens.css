@@ -1,0 +1,79 @@
+/* ============================================================================
+   Copia de emergencia de los tokens de `src/styles/tokens.css`.
+
+   Lo usa: `src/server/video/render/page.ts`. Primero intenta leer el archivo
+   real; si no está, cae acá.
+
+   Por qué existe: el render corre fuera del bundle de Next (worker, script de
+   costos, función serverless). En esos entornos `src/styles/tokens.css` puede
+   no estar en el sistema de archivos, y el video **no puede** quedarse sin
+   color semántico: el rojo del video tiene que ser exactamente el mismo rojo de
+   la app, o la evidencia deja de leerse como parte del mismo producto.
+
+   Solo tema claro: el video siempre se renderiza en claro para que el mismo
+   hallazgo se vea igual en todas las pantallas.
+
+   MANTENIMIENTO: `tests/video/tokens.test.ts` falla si `tokens.css` define un
+   `--cc-*` que acá falta. Si ese test se pone en rojo, copiá el token nuevo.
+   ========================================================================== */
+
+:root {
+  color-scheme: light;
+
+  --cc-canvas: oklch(0.976 0.004 85);
+  --cc-canvas-sunken: oklch(0.952 0.006 84);
+  --cc-surface: oklch(1 0 0);
+  --cc-surface-raised: oklch(1 0 0);
+  --cc-surface-hover: oklch(0.968 0.005 84);
+
+  --cc-ink: oklch(0.235 0.012 70);
+  --cc-ink-muted: oklch(0.485 0.012 70);
+  --cc-ink-subtle: oklch(0.615 0.01 70);
+  --cc-ink-inverse: oklch(0.985 0.003 85);
+
+  --cc-line: oklch(0.905 0.006 80);
+  --cc-line-strong: oklch(0.815 0.008 78);
+  --cc-field-border: oklch(0.63 0.011 72);
+
+  --cc-focus: oklch(0.52 0.17 258);
+  --cc-veil: oklch(0.2 0.02 70 / 0.45);
+
+  --cc-expuesto-solid: oklch(0.535 0.205 27);
+  --cc-expuesto-on-solid: oklch(0.99 0.005 30);
+  --cc-expuesto-soft: oklch(0.965 0.02 30);
+  --cc-expuesto-border: oklch(0.855 0.075 30);
+  --cc-expuesto-text: oklch(0.455 0.185 28);
+
+  --cc-incompleto-solid: oklch(0.755 0.155 68);
+  --cc-incompleto-on-solid: oklch(0.26 0.06 62);
+  --cc-incompleto-soft: oklch(0.968 0.028 78);
+  --cc-incompleto-border: oklch(0.865 0.075 75);
+  --cc-incompleto-text: oklch(0.455 0.105 62);
+
+  --cc-verificado-solid: oklch(0.545 0.115 153);
+  --cc-verificado-on-solid: oklch(0.99 0.005 150);
+  --cc-verificado-soft: oklch(0.965 0.022 155);
+  --cc-verificado-border: oklch(0.855 0.055 155);
+  --cc-verificado-text: oklch(0.435 0.095 153);
+
+  --cc-revisar-solid: oklch(0.545 0.085 250);
+  --cc-revisar-on-solid: oklch(0.99 0.004 250);
+  --cc-revisar-soft: oklch(0.965 0.012 250);
+  --cc-revisar-border: oklch(0.865 0.03 250);
+  --cc-revisar-text: oklch(0.445 0.075 252);
+
+  --cc-shadow-support:
+    0 1px 2px oklch(0.35 0.03 70 / 0.05), 0 2px 8px -3px oklch(0.35 0.03 70 / 0.07);
+  --cc-shadow-raised:
+    0 1px 2px oklch(0.35 0.03 70 / 0.05), 0 8px 24px -8px oklch(0.35 0.03 70 / 0.12);
+  --cc-shadow-float:
+    0 8px 16px -6px oklch(0.32 0.03 70 / 0.1), 0 28px 60px -18px oklch(0.32 0.03 70 / 0.2);
+  --cc-shadow-inset: inset 0 1px 2px oklch(0.35 0.03 70 / 0.08);
+  --cc-shadow-stamp: 0 2px 12px -3px oklch(0.535 0.205 27 / 0.25);
+
+  --cc-dur-instant: 90ms;
+  --cc-dur-fast: 150ms;
+  --cc-dur-base: 220ms;
+  --cc-dur-slow: 340ms;
+  --cc-dur-deliberate: 520ms;
+}

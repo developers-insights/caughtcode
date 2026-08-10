@@ -1,0 +1,12 @@
+#!/usr/bin/env node
+/*! caughtcode demo v1.0.0 | MIT */
+/**
+ * @license MIT
+ * SPDX-License-Identifier: MIT
+ */
+
+/* comentario comun que si se borra */
+import(/* webpackChunkName: "tarde" */ './tarde.js')
+
+console.log('hola')
+//# sourceMappingURL=banner.js.map

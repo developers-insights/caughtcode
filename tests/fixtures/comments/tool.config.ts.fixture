@@ -1,0 +1,4 @@
+// configuracion interna del build, nunca llega al navegador
+export default {
+  reactStrictMode: true, // recomendado
+}

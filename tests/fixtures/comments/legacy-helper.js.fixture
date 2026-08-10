@@ -1,0 +1,15 @@
+/** @type {string} */
+let nombre = 'sin definir'
+
+/**
+ * Suma dos numeros.
+ * @param {number} a primer sumando
+ * @param {number} b segundo sumando
+ * @returns {number}
+ */
+function sumar(a, b) {
+  return a + b // suma simple
+}
+
+// comentario comun sin anotaciones
+export { nombre, sumar }

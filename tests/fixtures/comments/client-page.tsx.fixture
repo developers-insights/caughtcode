@@ -1,0 +1,23 @@
+'use client'
+
+import { useState } from 'react'
+
+// Comentario de línea normal
+export default function Page() {
+  const [q, setQ] = useState('')
+
+  const url = "https://ejemplo.com//api" // no rompas esto
+  const tpl = `un /* falso comentario */ y ${q} final`
+  const re = /https?:\/\/[^\s]+/g
+
+  /* bloque real */
+  return (
+    <div className="wrap">
+      {/* este comentario llega al navegador */}
+      <input value={q} onChange={(e) => setQ(e.target.value)} />
+      <p>Busca algo /* esto es texto, no comentario */ aca</p>
+      <span title="a // b">{url.match(re)?.length ?? 0}</span>
+      <em>{tpl /* comentario dentro de expresion */}</em>
+    </div>
+  )
+}

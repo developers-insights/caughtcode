@@ -60,3 +60,8 @@ tmp/
 *.webm
 *.mov
 !docs/assets/**
+
+# Orquestación local
+.claude/settings.local.json
+video/out/
+.caughtcode-storage/

@@ -1,0 +1,634 @@
+/* ============================================================================
+   Escenografía del video. 1280 x 720.
+
+   Lo usa: `src/server/video/render/page.ts`, que inyecta este archivo junto a
+   los tokens en la página que graba Playwright.
+
+   Reglas que gobiernan este archivo:
+   - Todo color sale de un token `--cc-*`. Cero hex sueltos. El rojo del video
+     es el mismo rojo de la interfaz, o la evidencia no se lee como parte del
+     mismo producto.
+   - Una sola cosa importante por escena, y se nota sin leer.
+   - La grabación es la protagonista: cuando está en pantalla, el resto se corre.
+   - Nada de gradientes decorativos ni de tres cajas iguales en fila.
+
+   Geometría fija (suma 720):
+     cinta      44   contexto permanente, muy callado
+     escenario 564   acá pasa todo
+     estante   112   subtítulos, siempre legibles sobre fondo sólido
+   ========================================================================== */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  width: 1280px;
+  height: 720px;
+  overflow: hidden;
+  background: var(--cc-canvas);
+}
+
+body {
+  font-family: 'Instrument Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui,
+    sans-serif;
+  color: var(--cc-ink);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* El tono semántico del clip entero. Lo fija page.ts en el <body>. */
+body[data-tono='alarm'] {
+  --tono: var(--cc-expuesto-solid);
+  --tono-suave: var(--cc-expuesto-soft);
+  --tono-borde: var(--cc-expuesto-border);
+  --tono-texto: var(--cc-expuesto-text);
+}
+body[data-tono='neutral'] {
+  --tono: var(--cc-incompleto-solid);
+  --tono-suave: var(--cc-incompleto-soft);
+  --tono-borde: var(--cc-incompleto-border);
+  --tono-texto: var(--cc-incompleto-text);
+}
+body[data-tono='ok'] {
+  --tono: var(--cc-verificado-solid);
+  --tono-suave: var(--cc-verificado-soft);
+  --tono-borde: var(--cc-verificado-border);
+  --tono-texto: var(--cc-verificado-text);
+}
+body[data-tono='revisar'] {
+  --tono: var(--cc-revisar-solid);
+  --tono-suave: var(--cc-revisar-soft);
+  --tono-borde: var(--cc-revisar-border);
+  --tono-texto: var(--cc-revisar-text);
+}
+
+.marco {
+  position: relative;
+  width: 1280px;
+  height: 720px;
+  background: var(--cc-canvas);
+  overflow: hidden;
+}
+
+/* ── Cinta superior ─────────────────────────────────────────────────────
+   Orientación, no protagonismo: dice de qué hallazgo es este clip y se calla. */
+
+.cinta {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 40px;
+  border-bottom: 1px solid var(--cc-line);
+  background: var(--cc-canvas);
+  z-index: 5;
+}
+
+.cinta__sello {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--tono);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--tono) 18%, transparent);
+  flex: none;
+}
+
+.cinta__marca {
+  font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  font-weight: 600;
+  color: var(--cc-ink-subtle);
+  flex: none;
+}
+
+.cinta__titulo {
+  font-size: 13px;
+  color: var(--cc-ink-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  letter-spacing: -0.005em;
+}
+
+/* ── Escenario ──────────────────────────────────────────────────────────── */
+
+.escenario {
+  position: absolute;
+  inset: 44px 0 112px 0;
+  overflow: hidden;
+}
+
+.escena {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  visibility: hidden;
+  z-index: 2;
+}
+
+.escena[data-activa='1'] {
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 300ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Las escenas de grabación dejan ver la capa de video que está detrás. */
+.escena[data-tipo='recording'] {
+  pointer-events: none;
+  background: transparent;
+}
+
+/* ── Escena: frase a pantalla completa ──────────────────────────────────
+   Alineada a la izquierda con una regla vertical. Centrar un titular grande es
+   justo el gesto que hace que todo se parezca a todo. */
+
+.declaracion {
+  height: 100%;
+  display: grid;
+  grid-template-columns: 4px 1fr;
+  gap: 0 36px;
+  align-content: center;
+  padding: 0 96px 0 92px;
+}
+
+/* `height` queda en auto a propósito: con una altura explícita, `align-self:
+   stretch` no se aplica y la regla desaparece sin avisar. */
+.declaracion__regla {
+  align-self: stretch;
+  min-height: 100%;
+  background: var(--tono);
+  border-radius: 2px;
+  transform-origin: 50% 0;
+}
+
+.escena[data-activa='1'] .declaracion__regla {
+  animation: reglaEntra 520ms cubic-bezier(0.22, 1, 0.36, 1) 60ms both;
+}
+
+@keyframes reglaEntra {
+  from {
+    transform: scaleY(0);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
+
+.declaracion__cuerpo {
+  min-width: 0;
+  align-self: center;
+}
+
+.declaracion__ojal {
+  font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--tono-texto);
+  margin: 0 0 18px;
+}
+
+.declaracion__titular {
+  font-family: 'Instrument Serif', 'Iowan Old Style', Georgia, 'Times New Roman', serif;
+  font-weight: 400;
+  font-size: 58px;
+  line-height: 1.06;
+  letter-spacing: -0.022em;
+  color: var(--cc-ink);
+  margin: 0;
+  max-width: 17ch;
+  text-wrap: balance;
+}
+
+.declaracion__sub {
+  margin: 22px 0 0;
+  font-size: 21px;
+  line-height: 1.5;
+  color: var(--cc-ink-muted);
+  max-width: 40ch;
+}
+
+.escena[data-activa='1'] .declaracion__ojal {
+  animation: subeEntra 460ms cubic-bezier(0.22, 1, 0.36, 1) 120ms both;
+}
+.escena[data-activa='1'] .declaracion__titular {
+  animation: subeEntra 560ms cubic-bezier(0.22, 1, 0.36, 1) 200ms both;
+}
+.escena[data-activa='1'] .declaracion__sub {
+  animation: subeEntra 560ms cubic-bezier(0.22, 1, 0.36, 1) 320ms both;
+}
+
+@keyframes subeEntra {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ── Capa de grabación ──────────────────────────────────────────────────
+   Vive fuera de las escenas porque varias escenas comparten el mismo video: se
+   reencuadra y se reubica el tiempo, no se vuelve a cargar. */
+
+/* La grabación se apoya abajo y deja aire arriba para el rótulo: si el rótulo
+   flotara encima del cuadro taparía justo la parte de la app que se está
+   demostrando, que es lo único que no se puede tapar. */
+.capaGrabacion {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  align-items: end;
+  justify-items: center;
+  padding-bottom: 10px;
+  opacity: 0;
+  visibility: hidden;
+  z-index: 1;
+}
+
+.capaGrabacion[data-activa='1'] {
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 320ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Medidas de arranque. `escena.js` las ajusta a la proporción real de la
+   grabación, para que el cuadro abrace el video y no queden franjas muertas a
+   los costados. */
+.encuadre {
+  position: relative;
+  width: 1136px;
+  height: 496px;
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--cc-canvas-sunken);
+  border: 1px solid var(--cc-line-strong);
+  box-shadow: var(--cc-shadow-float);
+}
+
+.moviola {
+  position: absolute;
+  inset: 0;
+  transform-origin: 0 0;
+  transition:
+    transform 1150ms cubic-bezier(0.32, 0.72, 0, 1),
+    filter 500ms ease-out;
+  will-change: transform;
+}
+
+.moviola video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+  background: var(--cc-canvas-sunken);
+}
+
+/* El recuadro que señala dónde mirar. El borde se contra-escala para que se
+   vea siempre del mismo grosor por más que el encuadre se acerque. */
+.marca {
+  position: absolute;
+  border: 2px solid var(--tono);
+  border-radius: 4px;
+  opacity: 0;
+  transition:
+    opacity 340ms cubic-bezier(0.22, 1, 0.36, 1),
+    border-width 1150ms cubic-bezier(0.32, 0.72, 0, 1);
+  box-shadow:
+    0 0 0 9999px color-mix(in oklch, var(--cc-veil) 55%, transparent),
+    0 0 24px color-mix(in oklch, var(--tono) 45%, transparent);
+}
+
+.marca[data-visible='1'] {
+  opacity: 1;
+}
+
+/* Rótulo: dónde estaba el agente cuando pasó esto. Va arriba del cuadro,
+   centrado, nunca encima de la evidencia. */
+.rotulo {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  top: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  max-width: 780px;
+  padding: 7px 14px 7px 11px;
+  border-radius: 999px;
+  background: var(--cc-surface-raised);
+  border: 1px solid var(--cc-line);
+  box-shadow: var(--cc-shadow-raised);
+  z-index: 3;
+}
+
+.rotulo__punto {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--tono);
+  flex: none;
+  animation: latido 2.4s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes latido {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.55;
+    transform: scale(0.86);
+  }
+}
+
+.rotulo__texto {
+  font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 13px;
+  color: var(--cc-ink-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Keyframe propio: `subeEntra` termina en `transform: none` y le borraría el
+   centrado horizontal al rótulo. */
+.escena[data-activa='1'] .rotulo {
+  animation: subeEntraCentrado 420ms cubic-bezier(0.22, 1, 0.36, 1) 180ms both;
+}
+
+@keyframes subeEntraCentrado {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 14px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+/* ── Escena: código ─────────────────────────────────────────────────────── */
+
+.codigo {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 14px;
+  padding: 0 88px;
+}
+
+.codigo__ruta {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 10px;
+  font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 15px;
+  color: var(--cc-ink-muted);
+}
+
+.codigo__ruta b {
+  font-weight: 600;
+  color: var(--cc-ink);
+}
+
+.codigo__chip {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--tono-suave);
+  border: 1px solid var(--tono-borde);
+  color: var(--tono-texto);
+}
+
+.codigo__pozo {
+  background: var(--cc-canvas-sunken);
+  border: 1px solid var(--cc-line);
+  border-radius: 14px;
+  box-shadow: var(--cc-shadow-inset);
+  overflow: hidden;
+  padding: 20px 0;
+}
+
+.codigo__linea {
+  display: grid;
+  grid-template-columns: 76px 1fr;
+  align-items: baseline;
+  gap: 0 18px;
+  padding: 0 26px 0 0;
+  font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 19px;
+  line-height: 32px;
+  position: relative;
+  white-space: pre;
+}
+
+.codigo__n {
+  text-align: right;
+  color: var(--cc-ink-subtle);
+  font-size: 15px;
+  user-select: none;
+}
+
+.codigo__txt {
+  color: var(--cc-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* La línea señalada se pinta con un barrido de izquierda a derecha: se ve
+   llegar, no aparece de golpe. */
+.codigo__linea[data-marcada='1']::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--tono-suave);
+  border-left: 3px solid var(--tono);
+  z-index: 0;
+}
+
+.escena[data-activa='1'] .codigo__linea[data-marcada='1']::before {
+  animation: barrido 620ms cubic-bezier(0.32, 0.72, 0, 1) 700ms both;
+}
+
+.codigo__linea[data-marcada='1'] .codigo__n,
+.codigo__linea[data-marcada='1'] .codigo__txt {
+  position: relative;
+  z-index: 1;
+}
+
+.codigo__linea[data-marcada='1'] .codigo__txt {
+  font-weight: 600;
+}
+
+@keyframes barrido {
+  from {
+    clip-path: inset(0 100% 0 0);
+  }
+  to {
+    clip-path: inset(0 0 0 0);
+  }
+}
+
+.escena[data-activa='1'] .codigo__ruta {
+  animation: subeEntra 460ms cubic-bezier(0.22, 1, 0.36, 1) 100ms both;
+}
+.escena[data-activa='1'] .codigo__pozo {
+  animation: subeEntra 540ms cubic-bezier(0.22, 1, 0.36, 1) 200ms both;
+}
+
+/* ── Escena: esquema ────────────────────────────────────────────────────── */
+
+.esquema {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 26px;
+  padding: 0 96px;
+}
+
+.esquema svg {
+  width: 760px;
+  height: 300px;
+  overflow: visible;
+}
+
+.esquema__pie {
+  font-size: 19px;
+  color: var(--cc-ink-muted);
+  text-align: center;
+  max-width: 46ch;
+  margin: 0;
+}
+
+.escena[data-activa='1'] .esquema svg {
+  animation: subeEntra 520ms cubic-bezier(0.22, 1, 0.36, 1) 100ms both;
+}
+.escena[data-activa='1'] .esquema__pie {
+  animation: subeEntra 520ms cubic-bezier(0.22, 1, 0.36, 1) 260ms both;
+}
+
+.dib-caja {
+  fill: var(--cc-surface);
+  stroke: var(--cc-line-strong);
+  stroke-width: 1.5;
+}
+.dib-caja--tono {
+  fill: var(--tono-suave);
+  stroke: var(--tono-borde);
+}
+.dib-texto {
+  font-family: 'Instrument Sans', -apple-system, system-ui, sans-serif;
+  font-size: 17px;
+  fill: var(--cc-ink);
+  text-anchor: middle;
+  dominant-baseline: middle;
+}
+.dib-texto--chico {
+  font-size: 14px;
+  fill: var(--cc-ink-muted);
+}
+.dib-texto--tono {
+  fill: var(--tono-texto);
+  font-weight: 600;
+}
+.dib-linea {
+  stroke: var(--cc-line-strong);
+  stroke-width: 1.5;
+  fill: none;
+}
+.dib-fuga {
+  stroke: var(--tono);
+  stroke-width: 3;
+  fill: none;
+  stroke-linecap: round;
+  stroke-dasharray: 520;
+  stroke-dashoffset: 520;
+}
+.dib-punteada {
+  stroke: var(--cc-ink-subtle);
+  stroke-width: 2;
+  stroke-dasharray: 7 7;
+  fill: none;
+}
+
+.escena[data-activa='1'] .dib-fuga {
+  animation: traza 1400ms cubic-bezier(0.32, 0.72, 0, 1) 600ms both;
+}
+
+@keyframes traza {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+/* ── Estante de subtítulos ──────────────────────────────────────────────
+   Fondo sólido, no una banda translúcida sobre la grabación: la app del usuario
+   puede tener cualquier color y el subtítulo tiene que leerse siempre. */
+
+.estante {
+  position: absolute;
+  inset: auto 0 0 0;
+  height: 112px;
+  display: grid;
+  place-items: center;
+  padding: 0 120px 6px;
+  background: var(--cc-canvas);
+  border-top: 1px solid var(--cc-line);
+  z-index: 6;
+}
+
+.subtitulo {
+  margin: 0;
+  font-size: 29px;
+  line-height: 1.28;
+  font-weight: 500;
+  letter-spacing: -0.011em;
+  color: var(--cc-ink);
+  text-align: center;
+  max-width: 46ch;
+  text-wrap: balance;
+  opacity: 0;
+  transition: opacity 130ms ease-out;
+}
+
+.subtitulo[data-visible='1'] {
+  opacity: 1;
+}
+
+/* ── Progreso ───────────────────────────────────────────────────────────── */
+
+.progreso {
+  position: absolute;
+  inset: auto 0 0 0;
+  height: 3px;
+  background: var(--cc-line);
+  z-index: 7;
+}
+
+.progreso i {
+  display: block;
+  height: 100%;
+  width: 100%;
+  background: var(--tono);
+  transform: scaleX(0);
+  transform-origin: 0 50%;
+}

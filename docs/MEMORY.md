@@ -43,6 +43,28 @@
 
 ---
 
+### Build de Next (Turbopack) — dos trampas que solo aparecen con la cola enchufada
+
+Ninguna de las dos se ve con `tsc` ni con `vitest`: aparecen recién cuando `jobs/handlers.ts`
+importa los motores y estos entran al grafo de `/api/worker/tick`. Por eso conviene correr
+`pnpm build` **cada vez que se engancha un handler nuevo**, no solo antes de un release.
+
+- **`require.resolve()` con el nombre de archivo interpolado se traga la carpeta entera.**
+  `require.resolve(\`tree-sitter-wasms/out/${'${fileName}'}\`)` hace que Turbopack empaquete *todas* las
+  gramáticas de `out/`, y varias traen un cargador que importa un módulo `env` que solo existe
+  dentro del runtime de WebAssembly → `Can't resolve 'env'` y build caído por gramáticas que ni
+  usamos. Se arregla resolviendo el `package.json` del paquete y armando la ruta con `path.join`.
+  `serverExternalPackages` **no alcanza** para esto.
+- **`new URL('.', import.meta.url)` lo lee como un import.** Turbopack intenta resolver `'.'` como
+  módulo y falla. Usar `path.dirname(fileURLToPath(import.meta.url))`.
+
+### Prueba real sin tocar producción ajena
+
+`auth.users` es compartida con otro producto en producción: sembrar un usuario de prueba a mano
+dispararía **sus** triggers. La primera auditoría de punta a punta arranca con alguien registrándose
+desde `/registro`, no con un seed. Lo que sí se puede verificar sin base es el camino de ingesta
+completo (`scripts/probar-repo-publico.ts`).
+
 ## Bitácora de aprendizajes
 
 ### 2026-08-09

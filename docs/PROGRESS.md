@@ -7,63 +7,257 @@
 
 ## 📍 Dónde estamos ahora
 
-**Fase:** Diseño cerrado. **Cero código escrito.**
-**Última sesión:** 2026-08-09
+**Fase:** Construcción. Motores, base de datos, diseño y pantallas principales cerrados. **La cola quedó enchufada**: 5 de 7 tipos de trabajo tienen handler real.
+**Falta para la primera auditoría real:** que alguien se registre en la app y cargue un proyecto (ver "Qué falta para la prueba real").
+**Última sesión:** 2026-08-09.
 
-### Hecho y verificado
+### Verificado con comando corrido (repo completo, ahora mismo)
 
-- [x] Investigación de mercado, competencia, viabilidad técnica, economía unitaria, formato del output y estrategia de pilares — 7 frentes, con fuentes
-- [x] Producto definido y reencuadrado: de "video tutor" a **auditor que demuestra en video**
-- [x] Alcance cerrado: 3 pilares + capas secundarias (chat Q&A + "cómo funciona mi proyecto")
-- [x] Modelo de negocio definido: híbrido, sin créditos
-- [x] Nombre elegido: **caughtcode**
-- [x] Spec de diseño escrito → `docs/superpowers/specs/2026-08-09-auditor-apps-ia-design.md`
-- [x] Decisiones con evidencia registradas → `docs/DECISIONS.md`
-- [x] Plan de construcción escrito → `docs/MASTER_PLAN.md`
-- [x] Entorno de trabajo armado (`CLAUDE.md` + docs)
-- [x] Repo conectado a `github.com/manu-180/caughtcode`
+| Qué | Estado |
+|---|---|
+| `npx tsc --noEmit` | **0 errores** |
+| `npx vitest run` | **755 tests, 53 archivos, todos en verde** |
+| `pnpm build` | **verde por primera vez.** Requirió arreglar dos cosas que ni `tsc` ni los tests ven — quedaron en `MEMORY.md` |
+| `pnpm lint` | **CAÍDO para todo el repo** — `typescript-eslint@8.66` no soporta `typescript@7.0.2` |
+| Aislamiento entre organizaciones | Probado en los dos sentidos con PGlite (Postgres 17 real) |
+| **Migraciones contra la base real** (`ktmbtpuhqqofdkisqseq`) | **Aplicadas y verificadas.** 16 tablas `_caughtcode`, RLS *enabled + forced* en las 16, 64 policies, 15 funciones con `search_path` fijado, 3 buckets privados con límite. 0 filas |
+| Advisors (corridos a mano por SQL, el conector MCP no llega a esa base) | Sin llaves foráneas sin índice. **4 policies con `auth.uid()` sin envolver en subconsulta** → pendiente menor de performance |
+| **Bajar un repo público de GitHub sin token** | **Probado de verdad** con `scripts/probar-repo-publico.ts`: bajó `vercel/nextjs-postgres-nextauth-tailwindcss-template` (0,08 MB en 1,1 s), extrajo 41 archivos y reconoció Next.js + App Router + TypeScript + Tailwind + Drizzle. Repo inexistente devuelve `code = no_existe` |
+| Handlers registrados en la cola | **6 de 7**: `ingest_repo`, `index_code`, `run_checks`, `run_browser_agent`, `generate_video`, `scan_comments`. Falta solo `build_tutorials` (no tiene motor todavía) |
 
-### Lo que sigue, exactamente
+### Subsistemas
 
-**Próxima sesión = empezar a construir.** Arrancar por la **Ola 1** de `docs/MASTER_PLAN.md`:
-
-1. **S1 Fundación** — Next.js + Supabase + Vercel, modelo de datos con RLS, cola de jobs, tokens de diseño
-2. **S2 Ingesta** — GitHub App + upload de zip, detección de stack
-3. **Prototipo de video** — resolver Motion Canvas vs Remotion con una escena real de código animado (⚠️ es el riesgo técnico más grande sin resolver)
-
-El usuario pidió construir con un **agente orquestador** coordinando especialistas.
-
----
-
-## 🚧 A medias / bloqueado
-
-Nada a medias. No hay bloqueantes.
-
----
-
-## ❓ Decisiones abiertas
-
-| Tema | Cómo se resuelve | Ref |
+| # | Frente | Estado |
 |---|---|---|
-| Motion Canvas vs Remotion | Prototipo de una escena con código animado | `DECISIONS.md` D11 |
-| Precio concreto | Después de medir el COGS real de render | D16 |
-| Frameworks con prompts curados | Next.js/React + Supabase primero | — |
-| Política de datos (retención, borrado, no-entrenamiento) | Definir antes de aceptar el primer repo ajeno | S10 |
+| Datos / RLS | ✅ cerrado — 16 tablas `_caughtcode`, 64 policies, RLS forced en todas, `ensure_org_caughtcode()` en vez de trigger sobre `auth.users` (compartida con otro producto) |
+| Diseño | ✅ cerrado — 27 primitivas, shell, `docs/DESIGN.md`, tokens semánticos |
+| Cola de trabajos | ✅ motor cerrado — lease + backoff + etapas reanudables. **Solo `run_checks` está enchufado** (ver gap abajo) |
+| Ingesta + análisis | ✅ motor cerrado — tree-sitter confirmado corriendo, 91 tests. **Sin handler de cola** |
+| Chequeos | ✅ cerrado — 44 chequeos, 113 tests, handler de `run_checks` enchufado y probado con idempotencia |
+| Agente navegador | ✅ motor cerrado — Playwright + grabación, 69 tests. **Sin handler de cola**. Nunca corrió con modelo real (falta `ANTHROPIC_API_KEY`) |
+| Video | ✅ motor cerrado — D11 resuelta (HTML+Playwright+ffmpeg, no Remotion), 121 tests, video real verificado con `ffprobe` y a ojo. **Sin handler de cola** |
+| Comentarios (feature pedida por Manuel) | ✅ motor cerrado — dogfooding sobre este mismo repo: 1.951 comentarios clasificados, 0 directivas rotas en los dos modos. **Sin handler de cola** |
+| Pantalla de hallazgos | ✅ cerrada — verificada en navegador, 375 y 1280, los dos temas |
+| Pantalla de comentarios | 🔄 corriendo al cerrar la sesión |
+| Auth + onboarding + proyectos | ✅ cerrado — verificado en navegador. Encontró y arregló un cruce inválido de función servidor→cliente en `/cuenta` |
+| Chat + tutoriales | ⬜ sin empezar |
+| Monetización | ⬜ sin empezar (motor de costos y estimación previa ya existen en `src/server/cost/`) |
+| Landing + legales | ⬜ sin empezar (copy ya escrito en `src/content/copy.ts` → `LANDING`) |
+
+### Escrito por el orquestador (no delegable — criterio de marca)
+
+- `src/content/catalogo.ts` — 40 hallazgos con título, explicación, impacto y prompt de arreglo
+- `src/content/lenguaje.ts` — diccionario jerga→llano + `detectarJerga()`
+- `src/content/copy.ts` — landing, onboarding, estados, sección de comentarios
+- `docs/CONTRACTS.md` — contrato normativo, incluida la regla del sufijo `_caughtcode`
+
+---
+
+## 🔌 La cola, ya enchufada
+
+`src/server/jobs/handlers.ts` importa los seis módulos que existen. El único tipo de trabajo sin
+handler es `build_tutorials`, y es porque **su motor no está escrito**: son los videos de "cómo
+funciona mi proyecto", distintos de los videos de hallazgo (esos sí funcionan).
+
+**Cabos sueltos conocidos** (ninguno rompe el pipeline):
+
+- El botón de la pantalla de comentarios sigue escaneando **dentro del request**, no por la cola.
+  Anda, pero contradice la regla de que todo trabajo pesado va a una cola: con un repo grande el
+  usuario mira una pantalla trabada. La acción que encola ya existe
+  (`encolarEscaneoDeComentarios` en `comentarios/actions.ts`); falta sumarle un prop a
+  `CommentsScreenProps` y diseñar el estado de espera.
+- 4 policies con `auth.uid()` sin envolver en subconsulta (performance, no seguridad).
+
+**Orden de encadenado — corregido en esta sesión.** Antes `index_code` encolaba `run_checks` y
+`run_browser_agent` **en paralelo**, y eso era un bug de diseño: la revisión podía correr antes de
+que el agente dejara su evidencia, y entonces los chequeos de cookies, sesión y experiencia de uso
+se salteaban por falta de datos — justo lo que el producto promete encontrar. Ahora:
+
+```
+ingest_repo → index_code → ┬ (con dirección publicada) run_browser_agent → run_checks → generate_video ×3
+                           └ (sin dirección)                                run_checks → generate_video ×3
+```
+
+`generate_video` se encola solo para los **3 hallazgos de mayor rango con evidencia demostrable**
+(regla dura: máximo 3 "hacé esto ya"). `scan_comments` se encola aparte, desde su pantalla.
+
+---
+
+## 🔗 GitHub App conectada (2026-08-09, sesión de la tarde)
+
+`caughtcode-dev` creada en la cuenta `@developers-insights` (App ID `4541372`), solo lectura
+(Contents + Metadata), webhook desactivado (no hay endpoint todavía que lo escuche), instalada con
+"All repositories". Verificado con `listInstallations()` directo, sin pasar por sesión: la ve.
+Repos privados ya se pueden auditar desde el wizard.
+
+**Pendiente real, no bloqueante hoy:** `listInstallations()` (`src/server/ingest/github.ts:90`) trae
+**todas** las instalaciones de la App sin filtrar por quién la instaló — con un solo usuario no
+importa, pero es un hueco multi-tenant real (viola la regla de `CLAUDE.md`). Falta una tabla que ate
+cada instalación a la organización que la generó, más una ruta que la capture al volver de instalar.
+
+## 🕳️ Tres destinos del menú que daban 404, arreglados (2026-08-09)
+
+`nav-items.ts` y el botón "Ver todo lo que revisamos" apuntaban a rutas que nunca se crearon:
+`/como-funciona`, `/chat` y `/facturacion`. Se dividió en dos arreglos distintos:
+
+1. **Cobertura, construida de verdad** (no un placeholder): `analysis_runs_caughtcode.coverage`
+   (migración 0012) guarda qué pasó con cada chequeo del catálogo — encontró algo, corrió limpio, se
+   salteó y por qué, o no se pudo completar. Lo arma `run_checks` al terminar
+   (`calcularCobertura()` en `src/server/checks/handlers.ts`) y lo muestra
+   `/proyectos/[id]/hallazgos/cobertura`, agrupado por las tres áreas (`PILLAR_LABEL`). El botón de
+   `findings-board.tsx` ya apunta ahí. 2 tests nuevos en `tests/checks/handlers.test.ts`.
+   **Corridas viejas no tienen este dato** (la columna es nueva): para verlo hay que volver a revisar.
+2. **Cómo funciona, Preguntar y Plan y pagos**: son features reales sin construir todavía (tutoriales
+   en video, chat sobre el código, cobro). En vez de 404, ahora muestran un estado diseñado que dice
+   la verdad — qué va a ser, que no está listo, y un camino de vuelta. Nada de UI de cobro fantasma:
+   `facturacion` explícitamente dice que no se cobra nada todavía.
+
+## ✅ Primera auditoría real de punta a punta (2026-08-10)
+
+`alianzas-sabias` (repo privado de GitHub, 406 archivos) auditado completo en **52 segundos**:
+`ingest_repo → index_code → run_checks`, los tres `succeeded`, corrida `succeeded`, **12 hallazgos
+con 180 piezas de evidencia**. Costo medido: US$ 0,000055.
+
+### Los seis bugs que lo impedían, todos encontrados corriendo el pipeline de verdad
+
+Ninguno era detectable con `tsc` ni con los tests: todos aparecieron con un repo real.
+
+1. **El RPC de la cola devolvía trabajos fantasma.** `claim_job_caughtcode` estaba declarado
+   `RETURNS jobs_caughtcode` (tipo compuesto) y hacía `return null`, que PostgREST materializa como
+   *una fila con todo en NULL*. El worker la tomaba como trabajo real → bucle infinito, ~2 fallas por
+   segundo. Migración `0013`: `RETURNS SETOF`. Más guarda por `id` en `claim()` y un freno en el
+   worker (`src/server/jobs/circuit.ts`).
+2. **Los repos privados se bajaban por la vía anónima.** `sourceType.startsWith('github')` metía
+   `'github'` (App) y `'github_public'` en el mismo camino sin token. Ahora decide por fuente
+   (`src/server/ingest/fuente.ts`). **Decisión revisada:** el repositorio va **primero** y la copia de
+   Storage queda de respaldo — al revés, la segunda auditoría analizaría el código viejo.
+3. **Nadie cerraba nunca una corrida exitosa.** El único `markRunFinished` del repo estaba en el
+   camino de falla de ingest. Una auditoría que terminaba bien conservaba el estado del último error,
+   y la pantalla tapaba 180 hallazgos válidos con un cartel de error. Ahora
+   `src/server/jobs/reconcile.ts` deduce el estado de la cadena de trabajos, y `reopenRun()` limpia el
+   error al reintentar.
+4. **El mapa del proyecto no entraba en la etapa.** `index_code` devolvía el `CodeIndex` completo
+   (323 KB) contra un tope de 32 KB. Ahora escribe en `code_index_caughtcode` y la etapa devuelve un
+   recibo de 122 bytes. **Vigilar:** `revisar_y_guardar` de `checks` está en 6,5 KB y crece con el
+   catálogo de chequeos (llegaría al tope cerca de los 200 chequeos).
+5. **180 hallazgos era un volcado, no un informe** (violaba la regla dura #2). `src/server/checks/agrupar.ts`
+   agrupa por `checkId + severidad + confianza`; **180 → 12** conservando las 180 piezas de evidencia.
+   No se agrupan nunca las credenciales expuestas (cada una necesita su propia rotación) ni lo que
+   tiene grabación (el video se produce por hallazgo).
+6. **La pantalla decía "no encontramos nada serio" sin haber revisado.** Ver más abajo.
+
+### Seguridad — 11 funciones abiertas al mundo (migración 0014)
+
+Los advisors destaparon que `revoke ... from public` **no alcanza**: los default privileges de
+Supabase le dan `EXECUTE` a `anon` y `authenticated` a cada función nueva del schema `public`. Estaban
+invocables desde `/rest/v1/rpc/` con la clave del navegador, incluidas `delete_account_caughtcode` y
+`delete_project_cascade_caughtcode`. Verificado antes/después con explotación real: `org_of_project`
+**le entregaba la organización a un llamante sin sesión**. Ahora `anon` = 0 funciones.
+
+Además, los cuatro `org_of_*` traducían cualquier id a su organización **sin validar nada**, salteando
+RLS. Ahora validan membresía.
+
+**Causa raíz NO cerrada a propósito:** el `alter default privileges` del schema es del proyecto
+compartido; cambiarlo afecta al otro producto. La red de contención es `supabase/tests/grants_rpc.sql`
+— sumarlo al checklist de pre-release.
+
+### Pendientes conocidos
+
+- **Falta el cartel de precio antes de re-analizar** desde la pantalla de hallazgos (regla dura #3).
+  El botón encola sin mostrar cuánto sale. Falta el copy y de dónde sacar la estimación.
+- **"Volver a revisar" del encabezado apunta a `/proyectos/[id]`**, que redirige a hallazgos: es un
+  botón que no hace nada.
+- `TRABAJOS_DE_REVISION` está duplicado en `src/server/jobs/reconcile.ts` y `src/components/findings/view.ts`.
+- `last_error` se muestra a la vista y puede traer jerga de errores de Postgres sin traducir.
+- El agente de navegación **nunca corrió contra la base real** (el proyecto de prueba no tiene URL
+  publicada), así que la rama `deployedUrl → run_browser_agent` está probada solo con tests.
+- **Ningún video se generó todavía.**
+
+## 🧪 Qué falta para la prueba real (2026-08-09)
+
+1. **Registrarse en la app** (`/registro`) y crear el proyecto desde ahí. No se puede sembrar un
+   usuario a mano: `auth.users` es **compartida con otro producto en producción** y crear filas ahí
+   dispararía sus triggers. Es el único paso que no se puede automatizar sin permiso explícito.
+2. **Una app publicada con dirección web.** Sin eso solo se lee el código: no hay agente navegando,
+   no hay hallazgos de cookies ni de experiencia de uso, y no hay video.
+3. **Clave de voz** (`AZURE_SPEECH_KEY` + `AZURE_SPEECH_REGION`). Sin ella el video sale sin
+   narración, solo con subtítulos.
+4. **GitHub App** — solo hace falta para repos privados. Los públicos ya funcionan pegando la
+   dirección (probado, ver tabla de arriba).
+
+---
+
+## 🔐 Conexión a la base real — dónde quedó
+
+caughtcode **no tiene proyecto propio**: vive en `ktmbtpuhqqofdkisqseq` ("Comunidad latina", org
+"INSIGHTS manu"), compartido con otro producto en producción. Por eso todo objeto propio lleva
+sufijo `_caughtcode` (ver `src/lib/db/tablas.ts`, que es la fuente de verdad — nunca escribir un
+nombre de tabla a mano).
+
+**El conector de Supabase de esta sesión no llega a esa base** (solo alcanza el org "Proyectos").
+Se resolvió con el CLI de Supabase (`supabase link --project-ref ktmbtpuhqqofdkisqseq`, ya linkeado)
+más conexión directa por `pg` (paquete ya instalado):
+
+- El pooler (`aws-0-us-west-2.pooler.supabase.com`) da `tenant/user not found` — la región no
+  coincide con el shard real. **Usar la conexión directa**: `db.ktmbtpuhqqofdkisqseq.supabase.co:5432`,
+  usuario `postgres` (no `postgres.<ref>`).
+- TLS: el pooler y la conexión directa usan una CA propia de Supabase (`Supabase Root 2021 CA`,
+  autofirmada), no pública. **No desactivar `rejectUnauthorized`** — eso abre a un MITM real. La CA
+  se extrae en caliente con `openssl s_client -connect db.<ref>.supabase.co:5432 -starttls postgres
+  -showcerts` (queda en el `scratchpad` de la sesión, nunca en el repo) y se pasa como `ssl: { ca }`
+  al cliente de `pg`.
+- **Bloqueante actual:** `SUPABASE_DB_PASSWORD` en `.env.local` da `password authentication failed`.
+  No es un problema de formato (sin caracteres que necesiten codificar). Es la confusión clásica de
+  Supabase: la contraseña de la cuenta **no** es la contraseña de la base. Se resetea en
+  *Settings → Database → Database password*.
+- Con la contraseña correcta: correr `supabase/tests/preflight.sql` contra la base real (de solo
+  lectura, termina en `ROLLBACK`, falla ruidoso si algo choca con lo que ya existe) **antes** de
+  `supabase db push`. Después del push, `get_advisors` — obligatorio, y hay que leerlo filtrando por
+  `_caughtcode`: los hallazgos del otro producto no son nuestros para arreglar.
+
+---
+
+## ❓ Decisiones cerradas en esta sesión
+
+| Tema | Resolución |
+|---|---|
+| Base de datos compartida | Sin proyecto propio: todo con sufijo `_caughtcode` en `ktmbtpuhqqofdkisqseq` |
+| Trigger sobre `auth.users` | **Eliminado**, no filtrado. Es tabla compartida con otro producto en producción; un bug nuestro ahí les rompía el registro a ellos. La organización se crea con `ensure_org_caughtcode()` desde el código, en el primer ingreso |
+| `web-tree-sitter` | `0.20.8` — los `.wasm` de `tree-sitter-wasms` no son compatibles con `0.26` |
+| D11 (motor de video) | **Cerrada**: HTML + Playwright + ffmpeg, no Remotion. La escena lee los tokens de diseño reales, cero licencia de terceros |
+| Costo de render medido | `RENDER_COMPUTE_MINUTES_PER_VIDEO_SECOND = 0.019` (medido sobre 3 renders reales, reemplaza la estimación de `0.08`) |
+| `usage_events.analysis_run_id` | `on delete set null`, no `cascade`: borrar un proyecto no borra la historia de lo que se cobró |
+| Aristas `calls` en el grafo | No se emiten — sin resolución de tipos son una afirmación sin evidencia |
+| Jerga en `fixPrompt` | Permitida cuando el destinatario es otro modelo (el texto se pega en Claude Code/Cursor). `titlePlain`/`explanationPlain`/`impactPlain` siguen sin excepción |
+| `typescript` en `package.json` | Movido a `dependencies` — el motor de comentarios lo importa en runtime (TS7 no tiene parser separado del compilador) |
+
+---
+
+## 🚧 Bloqueantes reales
+
+1. **`pnpm lint` no corre en todo el repo.** `typescript-eslint@8.66` no soporta `typescript@7.0.2`. Bajar TS a 6.x o esperar soporte.
+2. **Falta `SUPABASE_DB_PASSWORD` correcta** — ver sección de conexión arriba.
+3. **`get_advisors` nunca corrió** — depende del punto 2.
+4. **Ningún motor probó con `ANTHROPIC_API_KEY` real** (agente navegador, guion de video, resumen de análisis) — todo probado con modelos falsos determinísticos.
 
 ---
 
 ## 📓 Bitácora
 
-### 2026-08-09 — Diseño y entorno
+### 2026-08-09 — Construcción con agentes en paralelo, migración a base compartida
 
-Sesión larga de brainstorming con 7 investigaciones en paralelo. Hallazgos que cambiaron el rumbo:
+Sesión larga: Ola 1 y Ola 2 despachadas juntas, corte por límite de cuota a mitad (retomado sin
+pérdida — todo estaba en disco), y a mitad de camino Manuel pidió mudar todo a una base de Supabase
+compartida con sufijo `_caughtcode` en vez de un proyecto propio.
 
-- **La idea original (video tutor explicando tu código) estaba commoditizada.** Existen gratis: `repo-explainer`, code2tutorial, ExplainGithub, NotebookLM Video Overview. Y con financiamiento YC: Midrender.
-- **El dolor elegido no era el dolor real.** Cero evidencia de gente pidiendo "explicame mi código"; mucha evidencia de gente pidiendo "¿esto es seguro?" y "se rompió y no sé por qué".
-- **Lovable ya regala el chat Q&A** (Chat Mode Agent) y el escaneo de seguridad nativos.
-- **Vibe App Scanner ya cubre 8 pilares a $19/mes** — pero hablándole a agentes de IA, no a personas.
-- **El reencuadre ganador:** el agente que navega la app es detector, prueba y video al mismo tiempo. Resuelve la alucinación, el costo del video y la credibilidad de un saque.
-
-Salida de la sesión: spec + decisiones + plan maestro + entorno de trabajo, todo en disco.
+Hallazgos que costó encontrar:
+- tree-sitter estaba **muerto** con las versiones instaladas; encenderlo reveló que además, con un
+  archivo roto, perdía información que el lector simple sí recuperaba — se combinan los dos.
+- El motor de comentarios colgaba hasta agotar memoria al escanear este mismo repo (bug cuadrático
+  con `<` en JSX). Solo apareció haciendo dogfooding real, no en fixtures de laboratorio.
+- Después del renombrado a `_caughtcode`, `queue.ts` y `ledger.ts` — el corazón de la cola y el
+  costo — seguían escribiendo en los nombres de tabla viejos. Los tests no lo detectaban porque su
+  base falsa usaba los mismos nombres viejos. Es exactamente el riesgo que el sufijo existía para
+  evitar, y pasó desapercibido hasta un chequeo manual cruzando `src/` completo.
 
 🤖 MODELO: Opus · RAZONAMIENTO: Alto

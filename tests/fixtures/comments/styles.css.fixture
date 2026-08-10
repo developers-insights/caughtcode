@@ -1,0 +1,15 @@
+/* paleta principal */
+:root {
+  --rojo: #b3261e; /* expuesto */
+  --url: url("https://ejemplo.com//assets/a.png");
+}
+
+.badge::after {
+  content: "/* no soy comentario */";
+  color: var(--rojo);
+}
+
+/* TODO: unificar con tokens.css */
+.badge {
+  border-radius: 4px;
+}

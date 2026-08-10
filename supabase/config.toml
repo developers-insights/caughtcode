@@ -1,0 +1,51 @@
+# caughtcode — configuración del proyecto Supabase.
+# Solo afecta al stack local (`supabase start`). El proyecto remoto se configura
+# desde el dashboard; acá vive lo que tiene que ser reproducible.
+
+project_id = "caughtcode"
+
+[api]
+enabled = true
+port = 54321
+# Nunca exponer otros esquemas: todo lo que se publica en la API vive en `public`.
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54322
+shadow_port = 54320
+major_version = 17
+
+[studio]
+enabled = true
+port = 54323
+
+[inbucket]
+enabled = true
+port = 54324
+
+[storage]
+enabled = true
+# Un repo comprimido grande puede pesar bastante; el límite duro está acá.
+file_size_limit = "200MiB"
+
+[auth]
+enabled = true
+site_url = "http://localhost:3000"
+additional_redirect_urls = ["http://localhost:3000/auth/callback"]
+jwt_expiry = 3600
+enable_refresh_token_rotation = true
+refresh_token_reuse_interval = 10
+enable_signup = true
+# Sin usuarios anónimos: cada proyecto tiene que pertenecer a alguien real.
+enable_anonymous_sign_ins = false
+
+[auth.email]
+enable_signup = true
+double_confirm_changes = true
+# En local no hay servidor de mail real; en producción esto va en true.
+enable_confirmations = false
+
+[analytics]
+enabled = false
