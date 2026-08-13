@@ -9,7 +9,57 @@
 
 **Fase:** Construcción. Motores, base de datos, diseño y pantallas principales cerrados. **La cola quedó enchufada**: 5 de 7 tipos de trabajo tienen handler real.
 **Falta para la primera auditoría real:** que alguien se registre en la app y cargue un proyecto (ver "Qué falta para la prueba real").
-**Última sesión:** 2026-08-09.
+**Última sesión:** 2026-08-12.
+
+---
+
+## 🔥 2026-08-12 — Ninguna auditoría se completó nunca en Vercel
+
+Las tres corridas con hallazgos (180 y 12) las produjo el worker local (`pnpm worker`). En producción, **cero**. Diagnóstico con evidencia, no con hipótesis.
+
+### La causa raíz
+
+`/api/worker/tick` corre en **Fluid Compute con concurrencia elástica**: varias invocaciones comparten los 2 GB de UNA instancia. Cada una carga ~250 MB solo en `registerAllHandlers()` (medido: 62 → 226 MB). El cron dispara cada 60 s sin coordinación, los trabajos tardan minutos, se apilan, y Vercel mata la instancia entera:
+
+```
+Vercel Runtime Error: instance was killed because it ran out of available memory
+```
+
+Reproducido dos veces el mismo día. **No era lentitud**: `buildCodeIndex` sobre el repo real de hiddenwire-app (394 archivos) tarda **1,2 s**.
+
+### Los cinco bugs y cómo quedaron
+
+| # | Qué pasaba | Arreglo |
+|---|---|---|
+| 1 | La instancia moría y el trabajo quedaba `running` con lease vivo. A los 3 intentos, `failed` — pero en SQL, sin pasar por `reconcileRunStatus()`. La corrida quedaba `running` **para siempre** | El RPC devuelve filas y el servidor reconcilia. Candado con vencimiento en la base (no advisory lock: con el pool de PostgREST puede quedar tomado para siempre). Handlers por `kind`. Un trabajo por tick. Lease 300 → 90 s |
+| 2 | `ingest_repo` dejaba el código en `/tmp`, que no sobrevive entre invocaciones. `walkFiles()` no falla: devuelve 0 archivos → **informe en blanco marcado como exitoso** | Rehidratación desde la copia de Storage; un índice de 0 archivos falla en vez de escribirse |
+| 3 | `run_browser_agent` y `generate_video` nunca se registraban (`playwright-core/browsers.json` no existe en serverless). Todo proyecto con app publicada se quedaba sin auditoría | Worker dedicado en Render (`Dockerfile` + `render.yaml`). `index_code` encola la revisión como red: el agente la adelanta con su evidencia en vez de encolar otra |
+| 4 | La pantalla giraba para siempre, sin un log | Detección de corrida abandonada, agregada sobre todos los trabajos, con el reloj del servidor |
+| 5 | Los 11 chequeos que dependen del navegador se reportaban como **"revisado, todo bien"** cuando el agente nunca corrió | Insumo `browser_run` separado de `deployed_app` |
+
+### Seguridad (auditoría dedicada, todo aplicado)
+
+- `jobs_caughtcode.payload` guardaba el `databaseUrl` **en claro** y cualquier miembro de la organización lo leía con un `GET`. Había **11 filas expuestas**. Migraciones `0017` (revoke columna por columna — `revoke select (payload)` sobre un grant de tabla no hace nada) y `0018` (limpieza). El secreto ya no se escribe: `src/server/ingest/conexion.ts`.
+- `storage_path` lo escribe cualquier miembro y el worker lo obedecía con `service_role`, que ignora las políticas de Storage → se podía traer el código de otra organización. Validación de prefijo `<org_id>/<project_id>/` + trigger guarda (`0019`).
+- Los mensajes de error arrastraban el texto crudo de Storage, con la ruta del bucket, hasta la pantalla.
+
+### Estado verificado (2026-08-12)
+
+| Qué | Estado |
+|---|---|
+| `pnpm typecheck` · `pnpm test` · `pnpm build` | limpio · **942 tests, 65 archivos** · compila |
+| Migraciones `0016`–`0019` | **aplicadas y verificadas** contra `ktmbtpuhqqofdkisqseq` |
+| Advisors de seguridad | ninguna función nueva del worker expuesta a `anon`/`authenticated` |
+| Rama | `arreglo/pipeline-auditorias`, 4 commits, **sin deployar** |
+
+### Lo que sigue
+
+1. `RENDER_API_KEY` en `.env.deploy.local` → crear el Background Worker.
+2. **`docker build` nunca se corrió** (no hay Docker en la máquina). Primera prueba real en Render.
+3. Deployar el código a Vercel (las migraciones ya están y son compatibles hacia atrás).
+4. Destrabar las dos corridas colgadas: `7713e31f` y `4f81ed96`.
+5. `purgeExpired()` sigue sin llamador: cubre la carpeta huérfana de una corrida que nunca cerró, y el proyecto borrado.
+6. Faltan en Vercel: `GITHUB_APP_CLIENT_SECRET`, `AZURE_SPEECH_KEY`/`REGION`, `STRIPE_*`.
 
 ### Verificado con comando corrido (repo completo, ahora mismo)
 
