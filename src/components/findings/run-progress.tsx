@@ -2,7 +2,7 @@ import type { ReactNode } from 'react'
 import { cn } from '@/lib/utils'
 import { Card, CardBody, Progress } from '@/components/ui'
 import { ESTADOS } from '@/content/copy'
-import { LISTA, PROGRESO } from './copy'
+import { CORTE, LISTA, PROGRESO } from './copy'
 import type { RunView } from './view'
 
 export interface RunProgressProps {
@@ -60,6 +60,40 @@ export function RunPartialNotice({ className }: RunPartialNoticeProps) {
       <CardBody className="space-y-1 pt-5 sm:pt-6">
         <h2 className="text-base font-medium text-ink">{LISTA.parcial.titulo}</h2>
         <p className="text-base text-ink-muted">{LISTA.parcial.texto}</p>
+      </CardBody>
+    </Card>
+  )
+}
+
+export interface RunStalledNoticeProps {
+  /** Ya había hallazgos guardados cuando se cortó: cambia el texto, no lo esconde. */
+  hayHallazgos: boolean
+  /** Volver a lanzar la revisión. Mismo botón que usa `RunFailedNotice`. */
+  action?: ReactNode
+  className?: string
+}
+
+/**
+ * La base todavía dice "corriendo", pero el trabajo que sostenía la corrida
+ * dejó de latir hace más de lo que un proceso vivo dejaría pasar (ver
+ * `UMBRAL_SIN_LATIDO_MS` en `view.ts`).
+ *
+ * Se ve parecida a `RunFailedNotice` a propósito —mismo tono, mismo lugar,
+ * misma acción— pero el texto es otro: acá el motor no reportó ningún motivo,
+ * así que no hay una caja de "esto fue lo que pasó" que mostrar. Inventar un
+ * motivo sería peor que no tener ninguno.
+ */
+export function RunStalledNotice({ hayHallazgos, action, className }: RunStalledNoticeProps) {
+  return (
+    <Card tone="incompleto" emphasis="marked" className={className}>
+      <CardBody className="space-y-4 pt-5 sm:pt-6">
+        <div role="status" className="space-y-1">
+          <h2 className="text-base font-medium text-ink">{CORTE.titulo}</h2>
+          <p className="max-w-prose text-base leading-relaxed text-ink-muted">
+            {hayHallazgos ? CORTE.textoConHallazgos : CORTE.texto}
+          </p>
+        </div>
+        {action}
       </CardBody>
     </Card>
   )

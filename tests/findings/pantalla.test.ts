@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
+  GRACIA_CIERRE_MS,
   MAX_DESTACADOS,
+  UMBRAL_SIN_LATIDO_MS,
   agruparPorPilar,
+  corridaAbandonada,
   cueActivo,
   cuesDelGuion,
   estaCorriendo,
@@ -14,6 +17,7 @@ import {
   seCorto,
   terminoAMedias,
   tieneEvidencia,
+  trabajoSinLatido,
   type JobView,
   type RunView,
 } from '@/components/findings/view'
@@ -144,6 +148,7 @@ describe('estadoDeRevision', () => {
     status: 'queued',
     lastError: null,
     createdAt: '2026-08-09T10:00:00.000Z',
+    updatedAt: '2026-08-09T10:00:00.000Z',
     ...over,
   })
 
@@ -233,6 +238,212 @@ describe('estadoDeRevision', () => {
     const { run: r, trabajos } = datosDemo('vacio')
     expect(estadoDeRevision(r, trabajos)).toEqual({ fase: 'lista', run: r })
     expect(r?.status).toBe('succeeded')
+  })
+})
+
+/* ── Corrida abandonada: la base dice "corriendo" pero dejó de latir ────── */
+
+describe('trabajoSinLatido / corridaAbandonada', () => {
+  const AHORA = Date.parse('2026-08-12T12:00:00.000Z')
+
+  const run = (over: Partial<RunView> = {}): RunView => ({
+    id: 'r',
+    status: 'running',
+    stage: 'Probando algo',
+    progress: 40,
+    finishedAt: null,
+    error: null,
+    ...over,
+  })
+
+  const job = (over: Partial<JobView> = {}): JobView => ({
+    id: 'j',
+    kind: 'run_checks',
+    status: 'running',
+    lastError: null,
+    createdAt: '2026-08-12T11:50:00.000Z',
+    updatedAt: '2026-08-12T11:50:00.000Z',
+    ...over,
+  })
+
+  /** `AHORA` menos `ms`, como ISO — para construir el último latido. */
+  const latidoHaceMs = (ms: number) => new Date(AHORA - ms).toISOString()
+
+  describe('trabajoSinLatido', () => {
+    it('un trabajo que no está "corriendo" nunca está sin latido', () => {
+      expect(trabajoSinLatido(job({ status: 'queued' }), AHORA)).toBe(false)
+      expect(trabajoSinLatido(job({ status: 'succeeded' }), AHORA)).toBe(false)
+      expect(trabajoSinLatido(job({ status: 'failed' }), AHORA)).toBe(false)
+    })
+
+    it('justo en el borde del umbral todavía no cuenta como sin latido', () => {
+      const trabajo = job({ status: 'running', updatedAt: latidoHaceMs(UMBRAL_SIN_LATIDO_MS) })
+      expect(trabajoSinLatido(trabajo, AHORA)).toBe(false)
+    })
+
+    it('un milisegundo pasado el umbral, ya no hay duda', () => {
+      const trabajo = job({
+        status: 'running',
+        updatedAt: latidoHaceMs(UMBRAL_SIN_LATIDO_MS + 1),
+      })
+      expect(trabajoSinLatido(trabajo, AHORA)).toBe(true)
+    })
+
+    it('un latido reciente no cuenta como muerto', () => {
+      const trabajo = job({ status: 'running', updatedAt: latidoHaceMs(15_000) })
+      expect(trabajoSinLatido(trabajo, AHORA)).toBe(false)
+    })
+  })
+
+  describe('corridaAbandonada', () => {
+    it('una corrida que no está "corriendo" nunca está abandonada', () => {
+      expect(corridaAbandonada(run({ status: 'succeeded' }), [], AHORA)).toBe(false)
+      expect(corridaAbandonada(null, [job()], AHORA)).toBe(false)
+    })
+
+    it('sin ningún trabajo propio no afirma nada: sin datos, no hay abandono', () => {
+      expect(corridaAbandonada(run(), [], AHORA)).toBe(false)
+      // Un trabajo de otra pantalla (scan_comments) tampoco cuenta como propio.
+      const ajeno = job({ kind: 'scan_comments', status: 'running', updatedAt: latidoHaceMs(999_999) })
+      expect(corridaAbandonada(run(), [ajeno], AHORA)).toBe(false)
+    })
+
+    it('el trabajo sigue latiendo: no está abandonada', () => {
+      const trabajo = job({ status: 'running', updatedAt: latidoHaceMs(15_000) })
+      expect(corridaAbandonada(run(), [trabajo], AHORA)).toBe(false)
+    })
+
+    it('el trabajo dejó de latir hace más del umbral: abandonada', () => {
+      const trabajo = job({
+        status: 'running',
+        updatedAt: latidoHaceMs(UMBRAL_SIN_LATIDO_MS + 60_000),
+      })
+      expect(corridaAbandonada(run(), [trabajo], AHORA)).toBe(true)
+    })
+
+    it('esperando que lo tome un trabajador: todavía no es abandono', () => {
+      // Encolado hace rato, sí, pero encolado no es lo mismo que muerto: puede
+      // seguir esperando lugar, igual que en `estadoDeRevision`.
+      const trabajo = job({ status: 'queued', updatedAt: latidoHaceMs(999_999) })
+      expect(corridaAbandonada(run(), [trabajo], AHORA)).toBe(false)
+    })
+
+    it('todos terminaron recién y la corrida sigue abierta: se le da tiempo al servidor', () => {
+      // `barrerCorridasHuerfanas()` la cierra sola en el próximo tick. Acusarla
+      // en el instante cero es correr una carrera contra el propio servidor: el
+      // cartel de error se convertiría en un informe exitoso a los segundos.
+      const terminado = job({ status: 'succeeded', updatedAt: latidoHaceMs(15_000) })
+      expect(corridaAbandonada(run(), [terminado], AHORA)).toBe(false)
+    })
+
+    it('todos terminaron hace rato y nadie cerró la corrida: abandonada', () => {
+      // Pasada la gracia ya no hay barrida que valga: nadie la va a cerrar.
+      const terminado = job({
+        status: 'succeeded',
+        updatedAt: latidoHaceMs(GRACIA_CIERRE_MS + 1_000),
+      })
+      expect(corridaAbandonada(run(), [terminado], AHORA)).toBe(true)
+    })
+
+    it('la gracia se mide contra el trabajo que terminó último, no contra el más viejo', () => {
+      const viejo = job({
+        id: 'viejo',
+        status: 'succeeded',
+        createdAt: '2026-08-12T10:00:00.000Z',
+        updatedAt: latidoHaceMs(GRACIA_CIERRE_MS + 60_000),
+      })
+      const recien = job({ id: 'recien', status: 'succeeded', updatedAt: latidoHaceMs(5_000) })
+      expect(corridaAbandonada(run(), [viejo, recien], AHORA)).toBe(false)
+    })
+
+    /* ── Varios trabajos en vuelo: el abanico de videos ─────────────────── */
+
+    it('alcanza con que uno siga latiendo, aunque sea el más viejo', () => {
+      const muerto = job({
+        id: 'muerto',
+        createdAt: '2026-08-12T11:59:00.000Z',
+        updatedAt: latidoHaceMs(UMBRAL_SIN_LATIDO_MS + 60_000),
+      })
+      const vivo = job({
+        id: 'vivo',
+        createdAt: '2026-08-12T11:50:00.000Z',
+        updatedAt: latidoHaceMs(15_000),
+      })
+      expect(corridaAbandonada(run(), [muerto, vivo], AHORA)).toBe(false)
+    })
+
+    it('los tres videos muertos sí la dan por abandonada', () => {
+      const muerto = (id: string) =>
+        job({ id, kind: 'generate_video', updatedAt: latidoHaceMs(UMBRAL_SIN_LATIDO_MS + 1_000) })
+      expect(corridaAbandonada(run(), [muerto('v1'), muerto('v2'), muerto('v3')], AHORA)).toBe(true)
+    })
+
+    it('un video que terminó tarde no puede tapar a otro que sigue en curso', () => {
+      // El caso real: `run_checks` encola tres videos, el worker toma de a dos y
+      // el tercero termina antes que el segundo. Ordenando por `createdAt`, el
+      // trabajo más nuevo está `succeeded` mientras el segundo sigue vivo.
+      const trabajos = [
+        job({ id: 'checks', kind: 'run_checks', status: 'succeeded', createdAt: '2026-08-12T11:50:00.000Z', updatedAt: latidoHaceMs(300_000) }),
+        job({ id: 'v1', kind: 'generate_video', status: 'succeeded', createdAt: '2026-08-12T11:53:00.000Z', updatedAt: latidoHaceMs(120_000) }),
+        job({ id: 'v2', kind: 'generate_video', status: 'running', createdAt: '2026-08-12T11:53:01.000Z', updatedAt: latidoHaceMs(10_000) }),
+        job({ id: 'v3', kind: 'generate_video', status: 'succeeded', createdAt: '2026-08-12T11:53:02.000Z', updatedAt: latidoHaceMs(30_000) }),
+      ]
+
+      expect(corridaAbandonada(run(), trabajos, AHORA)).toBe(false)
+      expect(estadoDeRevision(run(), trabajos, AHORA).fase).toBe('corriendo')
+    })
+
+    it('un solo trabajo esperando turno alcanza para que no sea abandono', () => {
+      // El rescate por arriendo vencido devuelve trabajos a `queued`: mientras
+      // haya uno ahí, el sistema se está curando solo y no hay nada que anunciar.
+      const muerto = job({ id: 'muerto', updatedAt: latidoHaceMs(UMBRAL_SIN_LATIDO_MS + 60_000) })
+      const rescatado = job({ id: 'rescatado', status: 'queued', updatedAt: latidoHaceMs(5_000) })
+      expect(corridaAbandonada(run(), [muerto, rescatado], AHORA)).toBe(false)
+    })
+  })
+
+  it('estadoDeRevision refleja el abandono como su propia fase, sin motivo', () => {
+    const enMarcha = run()
+    const trabajo = job({
+      status: 'running',
+      updatedAt: latidoHaceMs(UMBRAL_SIN_LATIDO_MS + 60_000),
+    })
+    expect(estadoDeRevision(enMarcha, [trabajo], AHORA)).toEqual({
+      fase: 'abandonada',
+      run: enMarcha,
+    })
+  })
+
+  it('con latido fresco, estadoDeRevision sigue diciendo "corriendo"', () => {
+    const enMarcha = run()
+    const trabajo = job({ status: 'running', updatedAt: latidoHaceMs(15_000) })
+    expect(estadoDeRevision(enMarcha, [trabajo], AHORA)).toEqual({
+      fase: 'corriendo',
+      run: enMarcha,
+    })
+  })
+
+  it('los dos estados de corte silencioso de la demostración se ven distintos entre sí', () => {
+    const sinHallazgos = datosDemo('corte-silencioso')
+    const conHallazgos = datosDemo('corte-silencioso-parcial')
+
+    // Los dos están "abandonados" con el mismo reloj: 2026-08-12 es bastante
+    // después del último latido fijo de la demostración (2026-08-10).
+    expect(estadoDeRevision(sinHallazgos.run, sinHallazgos.trabajos, AHORA).fase).toBe('abandonada')
+    expect(estadoDeRevision(conHallazgos.run, conHallazgos.trabajos, AHORA).fase).toBe('abandonada')
+    expect(sinHallazgos.findings).toHaveLength(0)
+    expect(conHallazgos.findings.length).toBeGreaterThan(0)
+  })
+
+  it('la demostración del abanico de videos se ve "en curso", no cortada', () => {
+    const { run: r, trabajos } = datosDemo('videos-fuera-de-orden', AHORA)
+
+    // El trabajo más nuevo terminó, pero hay otro corriendo y latiendo.
+    const masNuevo = [...trabajos].sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]!
+    expect(masNuevo.status).toBe('succeeded')
+    expect(trabajos.some((t) => t.status === 'running')).toBe(true)
+
+    expect(estadoDeRevision(r, trabajos, AHORA)).toEqual({ fase: 'corriendo', run: r })
   })
 })
 

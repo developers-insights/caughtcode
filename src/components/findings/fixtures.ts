@@ -38,6 +38,12 @@ export type EstadoDemo =
   | 'sin-permisos'
   | 'repo-grande'
   | 'job-fallado'
+  /** Corrida que la base dice "corriendo" pero dejó de latir, sin hallazgos. */
+  | 'corte-silencioso'
+  /** Lo mismo, pero ya había hallazgos guardados cuando se cortó. */
+  | 'corte-silencioso-parcial'
+  /** Varios videos a la vez, terminando fuera de orden: sigue en curso. */
+  | 'videos-fuera-de-orden'
 
 const ESTADOS_DEMO: readonly EstadoDemo[] = [
   'sin-revisar',
@@ -50,6 +56,9 @@ const ESTADOS_DEMO: readonly EstadoDemo[] = [
   'sin-permisos',
   'repo-grande',
   'job-fallado',
+  'corte-silencioso',
+  'corte-silencioso-parcial',
+  'videos-fuera-de-orden',
 ]
 
 export function esEstadoDemo(valor: string | undefined): valor is EstadoDemo {
@@ -391,6 +400,20 @@ export const CORRIDA_EN_MARCHA: RunView = {
   error: null,
 }
 
+/**
+ * Misma corrida "corriendo" que `CORRIDA_EN_MARCHA`, pero acá el trabajo que
+ * la sostiene (ver `TRABAJO_SIN_LATIDO` abajo) dejó de latir hace rato: es la
+ * que dispara `corridaAbandonada` en `view.ts`.
+ */
+export const CORRIDA_ABANDONADA: RunView = {
+  id: CORRIDA,
+  status: 'running',
+  stage: 'Probando el ingreso con Google',
+  progress: 38,
+  finishedAt: null,
+  error: null,
+}
+
 /* ── Trabajos en cola ──────────────────────────────────────────────────── */
 
 function trabajo(over: Partial<JobView> & { id: string }): JobView {
@@ -399,6 +422,7 @@ function trabajo(over: Partial<JobView> & { id: string }): JobView {
     status: 'queued',
     lastError: null,
     createdAt: '2026-08-09T13:58:00.000Z',
+    updatedAt: '2026-08-09T13:58:00.000Z',
     ...over,
   }
 }
@@ -417,8 +441,83 @@ export const TRABAJO_FALLADO = trabajo({
   lastError: ONBOARDING.erroresDeRepositorio.privado,
 })
 
-/** Qué se muestra en cada estado de la demostración. */
-export function datosDemo(estado: EstadoDemo): {
+/**
+ * Latió por última vez hace dos días — muy por encima de `UMBRAL_SIN_LATIDO_MS`
+ * (4 minutos) — para que la demostración muestre el mismo cuadro que vio el
+ * usuario en producción: una corrida "corriendo" que en realidad ya no lo está.
+ */
+export const TRABAJO_SIN_LATIDO = trabajo({
+  id: 'job-demo-sin-latido',
+  kind: 'run_browser_agent',
+  status: 'running',
+  createdAt: '2026-08-10T09:00:00.000Z',
+  updatedAt: '2026-08-10T09:14:00.000Z',
+})
+
+/**
+ * El abanico de videos, terminando fuera de orden.
+ *
+ * `run_checks` encola hasta tres videos (`MAX_VIDEOS_POR_CORRIDA`) y el worker
+ * los toma de a dos, así que el tercero puede terminar antes que el segundo.
+ * Acá el tercero es el trabajo más nuevo de todos y ya está `succeeded`,
+ * mientras el segundo sigue renderizando y latiendo hace diez segundos: la
+ * pantalla tiene que seguir diciendo "en curso".
+ *
+ * Es el caso que la versión anterior de `corridaAbandonada` daba por muerto,
+ * porque decidía mirando un solo trabajo — el más nuevo.
+ *
+ * Los tiempos son relativos al reloj que se le pase: un latido "reciente"
+ * escrito a mano con fecha fija dejaría de ser reciente al día siguiente.
+ */
+export function trabajosVideosFueraDeOrden(ahoraMs: number): JobView[] {
+  const hace = (ms: number) => new Date(ahoraMs - ms).toISOString()
+
+  return [
+    trabajo({
+      id: 'job-demo-checks',
+      kind: 'run_checks',
+      status: 'succeeded',
+      createdAt: hace(9 * 60_000),
+      updatedAt: hace(6 * 60_000),
+    }),
+    trabajo({
+      id: 'job-demo-video-1',
+      kind: 'generate_video',
+      status: 'succeeded',
+      createdAt: hace(6 * 60_000),
+      updatedAt: hace(3 * 60_000),
+    }),
+    // El que todavía está trabajando. Es el único que importa para decidir.
+    trabajo({
+      id: 'job-demo-video-2',
+      kind: 'generate_video',
+      status: 'running',
+      createdAt: hace(6 * 60_000 - 1_000),
+      updatedAt: hace(10_000),
+    }),
+    // Se encoló último y terminó antes que el anterior.
+    trabajo({
+      id: 'job-demo-video-3',
+      kind: 'generate_video',
+      status: 'succeeded',
+      createdAt: hace(6 * 60_000 - 2_000),
+      updatedAt: hace(30_000),
+    }),
+  ]
+}
+
+/**
+ * Qué se muestra en cada estado de la demostración.
+ *
+ * `ahoraMs` es el reloj contra el que se arman los estados que dependen del
+ * tiempo. Lo recibe en vez de leerlo acá adentro para que los tests puedan fijar
+ * la hora y que la demostración use la del servidor, la misma con la que después
+ * se juzga si un trabajo sigue latiendo.
+ */
+export function datosDemo(
+  estado: EstadoDemo,
+  ahoraMs: number = Date.now(),
+): {
   findings: Finding[]
   run: RunView | null
   trabajos: JobView[]
@@ -434,6 +533,20 @@ export function datosDemo(estado: EstadoDemo): {
       return { findings: [H1, RESTO[0]!], run: CORRIDA_EN_MARCHA, trabajos: [] }
     case 'vacio':
       return { findings: [], run: CORRIDA_TERMINADA, trabajos: [] }
+    case 'corte-silencioso':
+      return { findings: [], run: CORRIDA_ABANDONADA, trabajos: [TRABAJO_SIN_LATIDO] }
+    case 'corte-silencioso-parcial':
+      return {
+        findings: [H1, RESTO[0]!],
+        run: CORRIDA_ABANDONADA,
+        trabajos: [TRABAJO_SIN_LATIDO],
+      }
+    case 'videos-fuera-de-orden':
+      return {
+        findings: [H1, H2, H3, ...RESTO],
+        run: CORRIDA_EN_MARCHA,
+        trabajos: trabajosVideosFueraDeOrden(ahoraMs),
+      }
     default:
       return { findings: HALLAZGOS_DEMO, run: CORRIDA_TERMINADA, trabajos: [] }
   }

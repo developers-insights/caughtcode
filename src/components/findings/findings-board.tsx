@@ -16,8 +16,14 @@ import { LISTA } from './copy'
 import { FindingCard } from './finding-card'
 import { aFinding, aRun } from './mappers'
 import { PillarSection } from './pillar-section'
-import { ReviewFailed, ReviewNotStarted, ReviewQueued, ReviewRetryAction } from './review-state'
-import { RunFailedNotice, RunPartialNotice, RunProgress } from './run-progress'
+import {
+  ReviewFailed,
+  ReviewNotStarted,
+  ReviewQueued,
+  ReviewRetryAction,
+  ReviewStalled,
+} from './review-state'
+import { RunFailedNotice, RunPartialNotice, RunProgress, RunStalledNotice } from './run-progress'
 import {
   agruparPorPilar,
   estaCorriendo,
@@ -32,6 +38,30 @@ import {
 /** Cada cuánto volvemos a preguntar si la revisión salió de la fila. */
 const ESPERA_EN_COLA_MS = 10_000
 
+/**
+ * Cada cuánto refrescamos mientras la revisión corre.
+ *
+ * Los trabajos no viajan por Realtime (solo `analysis_runs` y `findings`, ver
+ * `REALTIME` en `src/lib/db/tablas.ts`), así que el último latido que
+ * conocemos acá queda congelado en el momento en que se armó la página. Sin
+ * refrescar de a ratos, una corrida sana que lleva un rato larga terminaría
+ * pareciendo abandonada solo porque no volvimos a preguntar — bastante menos
+ * que `UMBRAL_SIN_LATIDO_MS` (4 min) para no llegar tarde a esa duda.
+ */
+const REVISAR_LATIDO_MS = 45_000
+
+/**
+ * Lo mismo, pero cuando ya la dimos por abandonada.
+ *
+ * Los 45 s existen para no llegar tarde a *descubrir* el abandono. Descubierto,
+ * ese apuro no tiene sentido: seguir pidiendo la página entera cada 45 s, por
+ * pestaña abierta y para siempre, es puro costo sobre una corrida que ya no se
+ * mueve. Tampoco cortamos del todo — el servidor todavía puede rescatar el
+ * trabajo por arriendo vencido y terminarla, y si eso pasa el usuario merece
+ * enterarse sin recargar a mano.
+ */
+const REVISAR_ABANDONADA_MS = 5 * 60_000
+
 export interface FindingsBoardProps {
   projectId: string
   /** Lo que ya estaba cuando se armó la página en el servidor. */
@@ -44,6 +74,21 @@ export interface FindingsBoardProps {
    * limpia sin haberla mirado nunca.
    */
   trabajos?: JobView[]
+  /**
+   * Qué hora era, para el servidor, cuando se leyeron esos trabajos.
+   *
+   * No usamos `Date.now()` del navegador: los latidos contra los que se compara
+   * los escribe Postgres, y una máquina con el reloj adelantado más que
+   * `UMBRAL_SIN_LATIDO_MS` daría por muerta una revisión perfectamente sana.
+   * Además, con el reloj cerca del borde, el servidor y la hidratación podrían
+   * sacar conclusiones distintas de los mismos datos; con un valor que viaja en
+   * la carga, las dos pasadas calculan lo mismo.
+   *
+   * Que quede congelado entre refrescos es la intención, no un defecto: la fase
+   * cambia cuando el servidor manda datos nuevos, no cuando corre el reloj del
+   * usuario. Lo que la mantiene fresca es `REVISAR_LATIDO_MS`.
+   */
+  ahoraServidorMs: number
   /** Estado del video de cada hallazgo destacado, por id de hallazgo. */
   videos?: Record<string, FindingVideo>
   /**
@@ -67,6 +112,7 @@ export function FindingsBoard({
   findingsIniciales,
   runInicial,
   trabajos = [],
+  ahoraServidorMs,
   videos,
   live = true,
   className,
@@ -81,7 +127,10 @@ export function FindingsBoard({
   useEffect(() => setRun(runInicial), [runInicial])
 
   const corriendo = estaCorriendo(run)
-  const estado = useMemo(() => estadoDeRevision(run, trabajos), [run, trabajos])
+  const estado = useMemo(
+    () => estadoDeRevision(run, trabajos, ahoraServidorMs),
+    [run, trabajos, ahoraServidorMs],
+  )
 
   /* ── En vivo ─────────────────────────────────────────────────────────── */
 
@@ -147,6 +196,31 @@ export function FindingsBoard({
     return () => clearInterval(reloj)
   }, [live, estado.fase, router])
 
+  /**
+   * Mientras corre, refrescamos de a ratos para mantener fresco el último
+   * latido que conocemos (ver `REVISAR_LATIDO_MS`). Es lo que permite que la
+   * pantalla note sola cuando una corrida se quedó sin nadie del otro lado,
+   * sin que haga falta recargar.
+   *
+   * El ritmo lo marca la fase, no `estaCorriendo(run)`: una corrida trabada en
+   * "corriendo" que ya dimos por abandonada seguiría pidiendo la página entera
+   * cada 45 s para siempre, y no hay nada que esperar con esa urgencia.
+   */
+  useEffect(() => {
+    if (!live) return
+
+    const cada =
+      estado.fase === 'corriendo'
+        ? REVISAR_LATIDO_MS
+        : estado.fase === 'abandonada'
+          ? REVISAR_ABANDONADA_MS
+          : null
+    if (cada === null) return
+
+    const reloj = setInterval(() => router.refresh(), cada)
+    return () => clearInterval(reloj)
+  }, [live, estado.fase, router])
+
   /* ── Reparto ─────────────────────────────────────────────────────────── */
 
   const { destacados, resto, cerrados } = useMemo(() => partirHallazgos(findings), [findings])
@@ -174,10 +248,26 @@ export function FindingsBoard({
     return <ReviewFailed projectId={projectId} motivo={estado.motivo} className={className} />
   }
 
+  // Misma idea que la anterior, pero acá no hay `motivo`: el motor no avisó
+  // nada, se quedó callado. Ver `corridaAbandonada` en `view.ts`.
+  if (estado.fase === 'abandonada' && vacio) {
+    return <ReviewStalled projectId={projectId} className={className} />
+  }
+
   return (
     <div className={cn('space-y-12', className)}>
-      {corriendo && run && (
-        <RunProgress run={run} encontrados={findings.length} desconectado={desconectado} />
+      {estado.fase === 'corriendo' && (
+        <RunProgress run={estado.run} encontrados={findings.length} desconectado={desconectado} />
+      )}
+
+      {/* La corrida dice "corriendo" pero ya no hay nadie del otro lado. Va en
+          el mismo lugar que la barra que reemplaza, y no tapa lo que ya se
+          encontró: eso sigue abajo, intacto. */}
+      {estado.fase === 'abandonada' && (
+        <RunStalledNotice
+          hayHallazgos={!vacio}
+          action={<ReviewRetryAction projectId={projectId} />}
+        />
       )}
 
       {terminoAMedias(run) && <RunPartialNotice />}
