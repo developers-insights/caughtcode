@@ -318,6 +318,26 @@ export type JobRow = {
   updated_at: string
 }
 
+/**
+ * Candado de exclusión mutua del worker (migración 0016). No se lee nunca desde
+ * TypeScript: solo lo tocan `try_acquire_worker_lock_caughtcode` y
+ * `release_worker_lock_caughtcode`. Está acá porque este archivo es el reflejo
+ * del esquema, no solo de lo que el código usa hoy.
+ */
+export type WorkerLockRow = {
+  name: string
+  holder: string
+  acquired_at: string
+  expires_at: string
+}
+
+/** Una fila de las que devuelve `requeue_expired_jobs_caughtcode` desde 0016. */
+export type RequeuedJobRow = {
+  id: string
+  analysis_run_id: string | null
+  status: JobRow['status']
+}
+
 /** Lo que devuelven `delete_project_cascade` y `delete_account`. */
 export type DeleteResult = {
   project_id?: string
@@ -642,6 +662,12 @@ export type Database = {
           },
         ]
       }
+      worker_locks_caughtcode: {
+        Row: WorkerLockRow
+        Insert: Insertable<WorkerLockRow, 'name' | 'holder' | 'expires_at'>
+        Update: Updatable<WorkerLockRow>
+        Relationships: []
+      }
     }
     Views: { [_ in never]: never }
     Functions: {
@@ -664,8 +690,22 @@ export type Database = {
         Args: { p_kinds?: string[] | null; p_lease_seconds?: number }
         Returns: JobRow | null
       }
-      /** Solo service_role. Devuelve cuántos trabajos volvió a encolar o marcó failed. */
-      requeue_expired_jobs_caughtcode: { Args: Record<string, never>; Returns: number }
+      /**
+       * Solo service_role. Una fila por trabajo tocado: los que volvieron a
+       * `queued` y los que quedaron `failed` por agotar intentos. El servidor
+       * necesita saber CUÁLES para reconciliar sus corridas (migración 0016).
+       */
+      requeue_expired_jobs_caughtcode: { Args: Record<string, never>; Returns: RequeuedJobRow[] }
+      /** Solo service_role. true si el candado quedó tuyo. Ver migración 0016. */
+      try_acquire_worker_lock_caughtcode: {
+        Args: { p_name: string; p_holder: string; p_ttl_seconds?: number }
+        Returns: boolean
+      }
+      /** Solo service_role. Suelta el candado solo si sos su titular. */
+      release_worker_lock_caughtcode: {
+        Args: { p_name: string; p_holder: string }
+        Returns: boolean
+      }
       /** Borra el proyecto entero. Los archivos de Storage los borra el llamador. */
       delete_project_cascade_caughtcode: { Args: { p_project_id: string }; Returns: DeleteResult }
       /** Borra las organizaciones propias. No toca auth.users. */

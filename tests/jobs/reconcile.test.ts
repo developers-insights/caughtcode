@@ -11,23 +11,35 @@
  * el error del intento anterior.
  */
 
+import { mkdtemp, mkdir, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { T } from '@/lib/db/tablas'
 import { setJobsDb } from '@/server/jobs/db'
 import { reconcileRunStatus, esTrabajoDeRevision } from '@/server/jobs/reconcile'
 import { reopenRun } from '@/server/jobs/progress'
+import { pathExists, workspacePathFor } from '@/server/ingest/workspace'
 import { FakeDb, jobRow } from './fake-db'
 
 let db: FakeDb
+let raizDeCodigo: string
 
-beforeEach(() => {
+beforeEach(async () => {
   db = new FakeDb()
   setJobsDb(db)
+  // El borrado del código toca disco de verdad: se le da una raíz propia y
+  // descartable, nunca la del proyecto.
+  raizDeCodigo = await mkdtemp(path.join(tmpdir(), 'caughtcode-reconcile-'))
+  process.env.CAUGHTCODE_STORAGE_DIR = raizDeCodigo
 })
 
-afterEach(() => {
+afterEach(async () => {
   setJobsDb(null)
+  delete process.env.CAUGHTCODE_STORAGE_DIR
+  await rm(raizDeCodigo, { recursive: true, force: true })
 })
 
 function sembrarCorrida(overrides: Record<string, unknown> = {}): void {
@@ -155,6 +167,62 @@ describe('reconcileRunStatus', () => {
     const resultado = await reconcileRunStatus(null)
     expect(resultado.status).toBeNull()
     expect(db.operations).toHaveLength(0)
+  })
+
+  it('al cerrar la corrida, el código del usuario se va del disco', async () => {
+    // La promesa del producto (`retentionSummary()`): "Tu código se borra apenas
+    // termina el análisis". En Vercel se cumplía sola porque /tmp moría con la
+    // invocación; en un worker de Render, que vive días, hay que borrarlo.
+    const carpeta = workspacePathFor('proj-1', 'run-1')
+    await mkdir(path.join(carpeta, 'code'), { recursive: true })
+
+    sembrarCorrida()
+    sembrarCadena(
+      { kind: 'ingest_repo', status: 'succeeded' },
+      { kind: 'run_checks', status: 'succeeded' },
+    )
+
+    await reconcileRunStatus('run-1')
+
+    expect(await pathExists(carpeta)).toBe(false)
+  })
+
+  it('también se borra cuando la corrida termina mal', async () => {
+    const carpeta = workspacePathFor('proj-1', 'run-1')
+    await mkdir(path.join(carpeta, 'code'), { recursive: true })
+
+    sembrarCorrida()
+    sembrarCadena({ kind: 'ingest_repo', status: 'failed', last_error: 'no pudimos entrar' })
+
+    await reconcileRunStatus('run-1')
+
+    expect(await pathExists(carpeta)).toBe(false)
+  })
+
+  it('no se borra el código que un trabajo todavía en vuelo va a necesitar', async () => {
+    // `scan_comments` no compone la revisión —la corrida cierra igual— pero lee
+    // `payload.repoPath`. Borrarle el código abajo sería romperlo.
+    const carpeta = workspacePathFor('proj-1', 'run-1')
+    await mkdir(path.join(carpeta, 'code'), { recursive: true })
+
+    sembrarCorrida()
+    sembrarCadena(
+      { kind: 'run_checks', status: 'succeeded' },
+      { kind: 'scan_comments', status: 'queued' },
+    )
+
+    const resultado = await reconcileRunStatus('run-1')
+
+    expect(resultado.status).toBe('succeeded')
+    expect(await pathExists(carpeta)).toBe(true)
+  })
+
+  it('borrar dos veces no rompe: es idempotente', async () => {
+    sembrarCorrida()
+    sembrarCadena({ kind: 'run_checks', status: 'succeeded' })
+
+    await reconcileRunStatus('run-1')
+    await expect(reconcileRunStatus('run-1')).resolves.toMatchObject({ status: 'succeeded' })
   })
 
   it('esTrabajoDeRevision deja afuera lo que no compone la revisión', () => {

@@ -56,8 +56,12 @@ export const F = {
   orgOfThread: 'org_of_thread_caughtcode',
   /** Solo service_role. */
   claimJob: 'claim_job_caughtcode',
-  /** Solo service_role. */
+  /** Solo service_role. Desde 0016 devuelve una fila por trabajo tocado. */
   requeueExpiredJobs: 'requeue_expired_jobs_caughtcode',
+  /** Solo service_role. Un tick a la vez: ver migración 0016. */
+  tryAcquireWorkerLock: 'try_acquire_worker_lock_caughtcode',
+  /** Solo service_role. Solo el titular puede soltar su candado. */
+  releaseWorkerLock: 'release_worker_lock_caughtcode',
   deleteProjectCascade: 'delete_project_cascade_caughtcode',
   deleteAccount: 'delete_account_caughtcode',
   /** Única vía para que el cliente marque un hallazgo como resuelto. */

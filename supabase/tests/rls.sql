@@ -309,6 +309,42 @@ begin
     when insufficient_privilege then null;  -- esperado
   end;
 
+  -- Guarda de columnas de projects_caughtcode (migración 0019). RLS filtra
+  -- filas, no columnas: sin el trigger, Ana edita su propio proyecto —cosa que
+  -- puede— y de paso se lleva puesto de quién es y de dónde baja el worker el
+  -- código.
+  begin
+    update public.projects_caughtcode set org_id = v_org_b
+    where id = '11111111-0000-4000-8000-000000000001';
+    raise exception 'FALLÓ: Ana pudo mudar su proyecto a la organización de Bruno.';
+  exception
+    when insufficient_privilege then null;  -- esperado
+  end;
+
+  -- El caso que importa: apuntar la copia al .zip de Bruno para que el worker
+  -- —que baja con service_role y no pasa por las policies del bucket— se lo
+  -- descomprima a Ana y publique hallazgos con código ajeno.
+  begin
+    update public.projects_caughtcode
+    set storage_path = v_org_b || '/22222222-0000-4000-8000-000000000002/source.zip'
+    where id = '11111111-0000-4000-8000-000000000001';
+    raise exception 'FILTRACIÓN: Ana pudo apuntar la copia de su proyecto al código de Bruno.';
+  exception
+    when insufficient_privilege then null;  -- esperado
+  end;
+
+  -- Y por arriba tampoco: `..` se normaliza del otro lado y se escapa de la
+  -- carpeta aunque la ruta empiece bien.
+  begin
+    update public.projects_caughtcode
+    set storage_path = current_setting('test.org_a') ||
+                       '/11111111-0000-4000-8000-000000000001/../../otra/cosa.zip'
+    where id = '11111111-0000-4000-8000-000000000001';
+    raise exception 'FILTRACIÓN: Ana pudo salirse de su carpeta con "..".';
+  exception
+    when insufficient_privilege then null;  -- esperado
+  end;
+
   raise notice 'OK · Ana no puede escribir nada ajeno ni fabricar datos de sistema.';
 end;
 $$;
@@ -330,6 +366,14 @@ begin
   values ('77777777-0000-4000-8000-000000000007', 'user', 'Mensaje propio');
 
   update public.projects_caughtcode set name = 'App de Ana (renombrada)'
+  where id = '11111111-0000-4000-8000-000000000001';
+
+  -- La otra mitad de la guarda de 0019: el onboarding escribe `storage_path`
+  -- con la sesión de la persona, no con el service_role. Si el trigger
+  -- bloqueara la columna en vez de validarla, no se podría crear un proyecto.
+  update public.projects_caughtcode
+  set storage_path = current_setting('test.org_a') ||
+                     '/11111111-0000-4000-8000-000000000001/source.zip'
   where id = '11111111-0000-4000-8000-000000000001';
 
   raise notice 'OK · Ana sí puede operar sobre lo suyo.';
