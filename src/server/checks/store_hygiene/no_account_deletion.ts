@@ -20,7 +20,7 @@ export const noAccountDeletionTienda = defineCheck({
   id: 'sto.no_account_deletion',
   pillar: 'store_hygiene',
   name: 'store-no-account-deletion',
-  requires: ['code', 'deployed_app'],
+  requires: ['code', 'deployed_app', 'browser_run'],
   async run(ctx): Promise<FindingDraft[]> {
     return chequearFlujoFaltante(ctx, {
       catalogId: 'sto.no_account_deletion',

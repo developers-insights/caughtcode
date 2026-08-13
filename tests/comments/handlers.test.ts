@@ -25,11 +25,14 @@ import { describe, expect, it } from 'vitest'
 import { T } from '@/lib/db/tablas'
 import type { CommentHit, CommentScanResult } from '@/lib/types/domain'
 import { detectarJerga } from '@/content/lenguaje'
+import { scanProject } from '@/server/comments'
 import {
   crearHandlerScanComments,
   MAX_HITS_GUARDADOS,
+  TIEMPO_MAXIMO_ESCANEO_MS,
 } from '@/server/comments/handlers'
 import type { ScanCommentsPayload } from '@/server/comments/handlers'
+import { DEFAULT_LEASE_SECONDS } from '@/server/jobs'
 
 import { almacenEnMemoria, contextoDeTrabajo, DbFalsa } from '../fixtures/checks/db-falsa'
 
@@ -343,6 +346,49 @@ describe('defensa en profundidad', () => {
       // El resumen (lo que no es la lista detallada) sigue contando el total real.
       expect(fila.scanned_files).toBe(9999)
       expect(ctx.registro.some((l) => l.includes(MAX_HITS_GUARDADOS.toLocaleString('es-AR')))).toBe(true)
+    })
+  })
+
+  /**
+   * El tope de tiempo del escaneo tiene que quedar por debajo del arriendo del
+   * trabajo. Si se pasa, el permiso vence antes de que el corte llegue: otro
+   * worker toma el mismo trabajo y los dos escriben en `comment_scans`.
+   *
+   * Estuvo mal durante un tiempo y en silencio: el arriendo bajó de 300 s a 90 y
+   * este número —120 s— se quedó donde estaba, por encima. Este test es el que
+   * avisa si vuelve a pasar.
+   */
+  it('el tope del escaneo queda por debajo del arriendo del trabajo', () => {
+    const arriendoMs = DEFAULT_LEASE_SECONDS * 1000
+    expect(TIEMPO_MAXIMO_ESCANEO_MS).toBeLessThan(arriendoMs)
+    // Con margen de verdad: el corte tiene que llegar bastante antes, no justo.
+    expect(TIEMPO_MAXIMO_ESCANEO_MS).toBeLessThanOrEqual(arriendoMs * 0.75)
+  })
+
+  /**
+   * El escaneo es trabajo de CPU y `scanFile` es sincrónico: encadenado con
+   * microtareas, analizar N archivos era un solo bloque que no soltaba el hilo.
+   * Los temporizadores viven en otra fase del event loop, así que mientras
+   * duraba no podía dispararse ni el latido que renueva el arriendo ni el tope
+   * de tiempo de acá arriba. Los dos controles existían y ninguno servía.
+   *
+   * Que el turno se ceda **una vez por archivo** es lo que los pone a funcionar.
+   */
+  it('el escaneo suelta el hilo entre archivo y archivo', async () => {
+    await conRepo(async (repoPath) => {
+      for (let i = 0; i < 5; i += 1) {
+        await writeFile(path.join(repoPath, `archivo-${i}.ts`), '// una nota\nexport const a = 1\n')
+      }
+
+      let turnosCedidos = 0
+      const resultado = await scanProject(repoPath, {
+        ceder: async () => {
+          turnosCedidos += 1
+        },
+      })
+
+      expect(resultado.scannedFiles).toBe(5)
+      expect(turnosCedidos, 'el escaneo no le devolvió el turno al event loop').toBe(5)
     })
   })
 

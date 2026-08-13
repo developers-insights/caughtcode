@@ -121,16 +121,39 @@ export function chequeo(id: string): Check | undefined {
 
 /* ── Insumos ──────────────────────────────────────────────────────────── */
 
-export type Insumo = 'code' | 'database' | 'deployed_app'
+/**
+ * `deployed_app` y `browser_run` son dos cosas distintas, y confundirlas costaba
+ * un informe mentiroso.
+ *
+ * - `deployed_app` es **la dirección**: con eso solo ya se puede pedir páginas
+ *   por HTTP (enlaces rotos, 404, sourcemaps, CORS).
+ * - `browser_run` es **haber recorrido la app de verdad** con el agente. Sin eso
+ *   no hay cookies, ni pedidos de red, ni medidas de pantalla en el celular, ni
+ *   sesiones de las que deducir que falta un flujo.
+ *
+ * Hasta que se separaron, un solo insumo cubría las dos, y el motor lo daba por
+ * disponible con tener la dirección. O sea que cuando el agente no llegaba a
+ * correr —hoy el caso normal: el tick de Vercel no lo pide y el worker con
+ * navegador puede no existir— los once chequeos que leen `ctx.agent` corrían
+ * igual, no encontraban nada, y la cobertura los mostraba como "revisado, sin
+ * problemas". Un chequeo que no miró no puede decir que está todo bien.
+ */
+export type Insumo = 'code' | 'database' | 'deployed_app' | 'browser_run'
 
 /**
  * Cómo se le explica al usuario que falta un insumo. Sin jerga: no dice
  * "no se proveyó una connection string", dice qué tiene que hacer.
+ *
+ * Ojo con `browser_run`: es el único que **no es una decisión del usuario**,
+ * es algo que no pudimos hacer nosotros. El texto tiene que decir eso y no
+ * pedirle nada a nadie — presentar una falla propia como un insumo que la
+ * persona no dio es la clase de mentira que este archivo existe para evitar.
  */
 export const INSUMO_FALTANTE: Record<Insumo, string> = {
   code: 'No pudimos leer el código de tu proyecto.',
   database: 'No conectaste tu base de datos, así que no revisamos quién puede ver qué.',
   deployed_app: 'No nos diste la dirección de tu app publicada, así que no la pudimos probar por dentro.',
+  browser_run: 'No llegamos a recorrer tu app con el navegador, así que esto quedó sin revisar.',
 }
 
 /** Qué se gana conectando cada insumo. Va al lado del anterior. */
@@ -138,12 +161,14 @@ export const INSUMO_BENEFICIO: Record<Insumo, string> = {
   code: 'Con el código revisamos claves expuestas, flujos incompletos y textos sin terminar.',
   database: 'Conectándola probamos si un usuario puede ver los datos de otro. Es lectura: no tocamos nada.',
   deployed_app: 'Con la dirección recorremos tu app como un usuario y grabamos lo que pasa.',
+  browser_run: 'Cuando la recorremos vemos lo que solo se nota usándola: cookies, rastreadores, pantallas que se rompen en el celular y flujos que no están.',
 }
 
 export interface InsumosDisponibles {
   code: boolean
   database: boolean
   deployed_app: boolean
+  browser_run: boolean
 }
 
 export function faltantes(check: Check, disponibles: InsumosDisponibles): Insumo[] {

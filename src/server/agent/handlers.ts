@@ -10,24 +10,31 @@
  *   3. lo que observó de paso —pedidos de red, cookies, medición del celular— en
  *      el payload del trabajo de revisión.
  *
- * ## Por qué este trabajo encola la revisión
+ * ## Por qué este trabajo adelanta la revisión (y no la encola)
  *
  * Antes `index_code` encolaba la revisión y el agente **en paralelo**. Parecía
  * inofensivo y no lo era: los chequeos de cookies, de rastreadores, de flujos que
  * faltan y de pantalla en el celular leen lo que vio el agente. Corriendo a la
  * par, la revisión arrancaba primero, no encontraba nada de eso, y se salteaba
- * justo los chequeos que el producto promete. Ahora la cadena con app publicada
- * es `index_code` → `run_browser_agent` → `run_checks`, y la evidencia viaja en
- * el payload.
+ * justo los chequeos que el producto promete. La cadena con app publicada pasó a
+ * ser `index_code` → `run_browser_agent` → `run_checks`.
  *
- * ## Por qué la revisión se encola aunque el agente falle
+ * Serial y nada más tenía su propio agujero: si este trabajo **nunca corre** —el
+ * tick de Vercel no lo pide y el worker con navegador puede no estar—, nadie
+ * encolaba la revisión y la auditoría salía vacía. Por eso `index_code` encola
+ * hoy las dos cosas: el agente para ya, y la revisión con `run_after` diferido,
+ * de red. Este trabajo, al terminar, **adelanta esa revisión que ya está
+ * esperando** y le mete la evidencia en el payload (`adelantarOEncolar()`).
+ * Nunca crea una segunda: dos revisiones de la misma corrida se pelean las
+ * mismas filas de `findings`.
  *
- * Como consecuencia de lo anterior, este trabajo quedó en el medio de la cadena:
- * si se muere, se lleva puesta la auditoría entera. Por eso la última etapa
- * —encolar `run_checks`— corre **siempre**, incluso cuando no se pudo abrir el
- * navegador. Después de eso, y solo después, el trabajo falla con un mensaje que
- * explica qué pasó. El usuario ve el problema del agente y recibe igual la
- * revisión del código.
+ * ## Por qué la revisión se adelanta aunque el agente falle
+ *
+ * Este trabajo está en el medio de la cadena: si se muere, retrasa la auditoría
+ * entera hasta que venza la red. Por eso la última etapa corre **siempre**,
+ * incluso cuando no se pudo abrir el navegador. Después de eso, y solo después,
+ * el trabajo falla con un mensaje que explica qué pasó. El usuario ve el problema
+ * del agente y recibe igual la revisión del código, sin esperar el diferimiento.
  *
  * ## Idempotencia
  *
@@ -49,8 +56,8 @@ import pLimit from 'p-limit'
 
 import type { AgentSessionResult, AgentTaskId, CostEntry } from '@/lib/types/domain'
 import { B, T } from '@/lib/db/tablas'
-import { enqueue, registerHandler, runStages } from '@/server/jobs'
-import type { JobContext, JobHandler, StageStore } from '@/server/jobs'
+import { adelantarOEncolar, registerHandler, runStages } from '@/server/jobs'
+import type { JobContext, JobHandler, ResultadoAdelanto, StageStore } from '@/server/jobs'
 import { describeDbError, jobsDb, type JobsDb } from '@/server/jobs/db'
 import { describeError, JobError } from '@/server/jobs/errors'
 import type { RunChecksPayload } from '@/server/checks/handlers'
@@ -75,7 +82,12 @@ export interface RunBrowserAgentPayload {
   deployedUrl: string
   /** Carpeta del código. Viaja al trabajo de revisión, que sí la necesita. */
   repoPath?: string
-  /** Conexión de solo lectura a la base del usuario, si la conectó. También viaja. */
+  /**
+   * @deprecated Solo para los trabajos que quedaron encolados con el secreto
+   * adentro. Este handler nunca usó la conexión: la recibía y la pasaba de mano
+   * en mano, dejándola escrita en un `jobs.payload` más. Ya no la reenvía;
+   * `run_checks` la resuelve sola (ver `@/server/ingest/conexion`).
+   */
   databaseUrl?: string | null
   /** Qué pruebas correr. Por defecto, las que apliquen al stack detectado. */
   tasks?: AgentTaskId[]
@@ -97,7 +109,8 @@ export interface DependenciasRunBrowserAgent {
   run?: (options: RunAgentSessionOptions) => Promise<AgentSessionResult[]>
   /** Puente al modelo. En los tests va uno falso y determinístico. */
   complete?: LlmComplete
-  encolar?: typeof enqueue
+  /** Cómo se le avisa a la revisión que ya puede arrancar. Se inyecta en los tests. */
+  adelantar?: typeof adelantarOEncolar
   /** Carpeta temporal de la corrida. */
   workspace?: () => Promise<string>
 }
@@ -339,9 +352,9 @@ async function encolarRevision(
   deps: DependenciasRunBrowserAgent,
   resumen: ResumenPrueba | null,
   ids: { analysisRunId: string; projectId: string },
-): Promise<{ encolado: boolean; conEvidencia: boolean }> {
+): Promise<{ resultado: ResultadoAdelanto; conEvidencia: boolean }> {
   const storage = deps.storage ?? supabaseStorage
-  const encolar = deps.encolar ?? enqueue
+  const adelantar = deps.adelantar ?? adelantarOEncolar
 
   let observaciones: AgentObservations | undefined
   if (resumen?.evidenciaEn) {
@@ -349,20 +362,32 @@ async function encolarRevision(
     if (guardada && tieneAlgo(guardada.observaciones)) observaciones = guardada.observaciones
   }
 
+  // Sin `databaseUrl`: la conexión a la base del usuario no se copia a otro
+  // payload. `run_checks` la resuelve cuando la necesita.
   const siguiente: RunChecksPayload = {
     repoPath: payload.repoPath ?? '',
     deployedUrl: payload.deployedUrl ?? null,
-    databaseUrl: payload.databaseUrl ?? null,
     ...(observaciones ? { agentEvidence: observaciones } : {}),
   }
 
-  await encolar({
+  const resultado = await adelantar({
     orgId: ctx.orgId,
     projectId: ids.projectId,
     analysisRunId: ids.analysisRunId,
     kind: 'run_checks',
     payload: siguiente,
   })
+
+  if (resultado === 'ya_no_esperaba') {
+    // La red de `index_code` venció y otro worker ya se llevó la revisión. No se
+    // encola una segunda: dos revisiones sobre la misma corrida se pelean las
+    // mismas filas de `findings`. Lo que se pierde es esta evidencia, y eso el
+    // informe lo dice — esos chequeos quedan marcados como no revisados.
+    ctx.log(
+      'La revisión ya había arrancado por su cuenta cuando terminamos de probar tu app, ' +
+        'así que esta vez no pudo usar lo que vimos en el navegador.',
+    )
+  }
 
   if (!observaciones) {
     ctx.log(
@@ -371,7 +396,7 @@ async function encolarRevision(
     )
   }
 
-  return { encolado: true, conEvidencia: Boolean(observaciones) }
+  return { resultado, conEvidencia: Boolean(observaciones) }
 }
 
 function tieneAlgo(observaciones: AgentObservations): boolean {

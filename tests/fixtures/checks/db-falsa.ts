@@ -142,11 +142,18 @@ class Consulta implements PromiseLike<Resultado> {
         return { data: null, error: null }
       }
       case 'update': {
-        const actualizadas = filas.map((f) =>
-          this.coincide(f) ? { ...f, ...this.cambios } : f,
-        )
+        // Como PostgREST: el `UPDATE` devuelve las filas que tocó cuando quien
+        // llama pide `.select()`. Es lo que hace verificable un compare-and-set
+        // (`adelantarOEncolar()` decide con eso si ganó la carrera o no).
+        const tocadas: Fila[] = []
+        const actualizadas = filas.map((f) => {
+          if (!this.coincide(f)) return f
+          const nueva = { ...f, ...this.cambios }
+          tocadas.push(nueva)
+          return nueva
+        })
         this.db.tablas.set(this.tabla, actualizadas)
-        return { data: null, error: null }
+        return { data: this.unico ? (tocadas[0] ?? null) : tocadas, error: null }
       }
       case 'select': {
         let salida = filas.filter((f) => this.coincide(f))

@@ -13,7 +13,7 @@ export const noPasswordReset = defineCheck({
   id: 'cmp.no_password_reset',
   pillar: 'completeness',
   name: 'no-password-reset',
-  requires: ['code', 'deployed_app'],
+  requires: ['code', 'deployed_app', 'browser_run'],
   async run(ctx): Promise<FindingDraft[]> {
     return chequearFlujoFaltante(ctx, {
       catalogId: 'cmp.no_password_reset',

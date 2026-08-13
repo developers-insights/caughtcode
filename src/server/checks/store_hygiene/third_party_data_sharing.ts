@@ -17,7 +17,7 @@ export const thirdPartyDataSharing = defineCheck({
   id: 'sto.third_party_data_sharing',
   pillar: 'store_hygiene',
   name: 'third-party-data-sharing',
-  requires: ['code', 'deployed_app'],
+  requires: ['code', 'deployed_app', 'browser_run'],
   async run(ctx): Promise<FindingDraft[]> {
     const pedidos = ctx.agent?.network ?? []
     if (pedidos.length === 0) return []

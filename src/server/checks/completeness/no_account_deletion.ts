@@ -17,7 +17,7 @@ export const noAccountDeletion = defineCheck({
   id: 'cmp.no_account_deletion',
   pillar: 'completeness',
   name: 'no-account-deletion',
-  requires: ['code', 'deployed_app'],
+  requires: ['code', 'deployed_app', 'browser_run'],
   async run(ctx): Promise<FindingDraft[]> {
     return chequearFlujoFaltante(ctx, {
       catalogId: 'cmp.no_account_deletion',

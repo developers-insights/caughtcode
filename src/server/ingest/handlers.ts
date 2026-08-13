@@ -69,12 +69,13 @@ import {
   type RepoRef,
   type StoredGithubConnection,
 } from './github'
+import { rutaDelCodigo, type ResultadoIngesta } from './index'
 import {
-  hayCodigoEnDisco,
-  ingestar,
-  rutaDelCodigo,
-  type ResultadoIngesta,
-} from './index'
+  almacenSupabase,
+  asegurarCodigoEnDisco,
+  esRutaDelProyecto,
+  type AlmacenRepos,
+} from './rehidratar'
 import { detectStack } from './stack'
 import { ZipRejectedError } from './zip'
 
@@ -85,24 +86,30 @@ export interface IngestRepoPayload {
   repoUrl?: string | null
   /** Dirección de la app publicada. Si falta, se lee del proyecto. */
   deployedUrl?: string | null
-  /** Conexión de solo lectura a la base del usuario. Si falta, se lee de sus conexiones. */
-  databaseUrl?: string | null
 }
 
-/** Lo que espera `index_code`. Se replica acá para no importar del frente de análisis. */
+/**
+ * Lo que espera `index_code`. Se replica acá para no importar del frente de
+ * análisis.
+ *
+ * **Sin `databaseUrl`, y no es un olvido.** Antes se descifraba la conexión a la
+ * base del usuario y se la metía en claro acá, o sea en `jobs.payload`, que
+ * cualquier miembro de la organización puede leer. Ahora cada trabajo que la
+ * necesita la resuelve solo (ver `./conexion`).
+ */
 interface IndexCodePayload {
   repoPath: string
   deployedUrl?: string | null
-  databaseUrl?: string | null
 }
 
 /* ── Inyección de dependencias ────────────────────────────────────────── */
 
-/** Guardado del archivo comprimido. Detrás está Supabase Storage. */
-export interface AlmacenRepos {
-  descargar(bucket: string, ruta: string): Promise<Uint8Array>
-  subir(bucket: string, ruta: string, bytes: Uint8Array): Promise<void>
-}
+/**
+ * El almacén y su implementación real viven en `./rehidratar`, porque los tres
+ * trabajos de la cadena los necesitan. Se reexportan para no romper a quien ya
+ * los importa desde acá.
+ */
+export { almacenSupabase, type AlmacenRepos }
 
 /**
  * Lo que el handler necesita de la GitHub App. Es una interfaz y no las
@@ -130,51 +137,10 @@ export interface DependenciasIngestRepo {
   db?: () => Promise<JobsDb>
   store?: StageStore
   almacen?: AlmacenRepos
-  /** Descifra la conexión a la base del usuario. Separado para poder probarlo. */
-  descifrar?: (credencial: string) => Promise<string>
   /** Acceso a repositorios privados con la GitHub App. */
   github?: AccesoGithubApp
   /** Descifra la conexión con GitHub guardada en el proyecto. */
   descifrarGithub?: (credencial: string) => Promise<StoredGithubConnection>
-}
-
-/**
- * El import es tardío a propósito: `@/lib/supabase/admin` arranca con
- * `import 'server-only'`, que revienta fuera del runtime de React Server
- * Components. Cargándolo recién cuando de verdad se va a usar, los tests nunca
- * lo tocan.
- */
-export const almacenSupabase: AlmacenRepos = {
-  async descargar(bucket, ruta) {
-    const { createAdminClient } = await import('@/lib/supabase/admin')
-    const { data, error } = await createAdminClient().storage.from(bucket).download(ruta)
-    if (error || !data) {
-      throw new JobError('No pudimos abrir la copia guardada de tu código.', {
-        retryable: true,
-        code: 'descarga_fallida',
-        cause: error,
-      })
-    }
-    return new Uint8Array(await data.arrayBuffer())
-  },
-  async subir(bucket, ruta, bytes) {
-    const { createAdminClient } = await import('@/lib/supabase/admin')
-    const { error } = await createAdminClient()
-      .storage.from(bucket)
-      .upload(ruta, bytes, { contentType: 'application/zip', upsert: true })
-    if (error) {
-      throw new JobError('No pudimos guardar una copia de tu código para analizarlo.', {
-        retryable: true,
-        code: 'guardado_fallido',
-        cause: error,
-      })
-    }
-  },
-}
-
-async function descifrarPorDefecto(credencial: string): Promise<string> {
-  const { decryptSecret } = await import('@/lib/crypto')
-  return decryptSecret(credencial)
 }
 
 /**
@@ -220,7 +186,6 @@ export function crearHandlerIngestRepo(
   return async (payload, ctx) => {
     const db = await (deps.db ?? jobsDb)()
     const almacen = deps.almacen ?? almacenSupabase
-    const descifrar = deps.descifrar ?? descifrarPorDefecto
     const github = deps.github ?? githubAppReal
     const descifrarGithub = deps.descifrarGithub ?? descifrarGithubPorDefecto
 
@@ -228,8 +193,11 @@ export function crearHandlerIngestRepo(
     const proyecto = await leerProyecto(db, projectId)
     const analysisRunId = await asegurarCorrida(db, ctx, projectId)
 
+    // La organización dueña del proyecto: la misma con la que se arma la ruta de
+    // esta corrida y la única bajo la que se acepta una copia guardada.
+    const orgDelProyecto = proyecto.orgId ?? ctx.orgId
     const codeDir = rutaDelCodigo(projectId, analysisRunId)
-    const rutaCorrida = rutaDelArchivo(proyecto.orgId ?? ctx.orgId, projectId, analysisRunId)
+    const rutaCorrida = rutaDelArchivo(orgDelProyecto, projectId, analysisRunId)
 
     // Memoria de esta invocación: si una etapa ya trajo el archivo o ya
     // descomprimió, las siguientes no lo vuelven a hacer.
@@ -242,6 +210,16 @@ export function crearHandlerIngestRepo(
     /** Trae el archivo de un origen concreto. Cada camino usa su credencial, o ninguna. */
     const traerDe = async (origen: OrigenCodigo): Promise<Uint8Array> => {
       if (origen.tipo === 'guardado') {
+        // Última puerta antes de un descargador que corre con `service_role` y
+        // no mira las políticas del bucket. El plan ya deja afuera las rutas
+        // ajenas; el chequeo vive igual pegado a la descarga porque es el único
+        // punto por el que no se puede pasar de largo.
+        if (!esRutaDelProyecto(origen.ruta, orgDelProyecto, projectId)) {
+          throw new JobError('La copia guardada de tu código no es de este proyecto.', {
+            retryable: false,
+            code: 'copia_fuera_del_proyecto',
+          })
+        }
         const bytes = await almacen.descargar(B.repos, origen.ruta)
         rutaDeOrigen = origen.ruta
         shaTraido = null
@@ -297,11 +275,21 @@ export function crearHandlerIngestRepo(
     const conseguirArchivo = async (): Promise<Uint8Array> => {
       if (archivoEnMemoria) return archivoEnMemoria
 
+      // Acá sí hay a dónde caer, así que una copia que no es de este proyecto no
+      // corta la auditoría: se saca del plan y se sigue con el repositorio. Si
+      // era el único origen, el plan queda vacío y `sinFuente()` le dice al
+      // usuario cómo destrabarlo (subir el .zip de nuevo o pegar la dirección).
+      // Fallar cerrado sin dejar al cliente sin servicio.
       const plan = planDeFuentes({
         sourceType: proyecto.sourceType,
         repoUrl: payload.repoUrl ?? proyecto.repoUrl,
         storagePath: proyecto.storagePath,
         rutaCorrida,
+      }).filter((origen) => {
+        if (origen.tipo !== 'guardado') return true
+        if (esRutaDelProyecto(origen.ruta, orgDelProyecto, projectId)) return true
+        ctx.log('Dejamos afuera una copia guardada que no está en la carpeta de este proyecto.')
+        return false
       })
 
       if (plan.length === 0) throw sinFuente()
@@ -320,25 +308,30 @@ export function crearHandlerIngestRepo(
       throw sinFuente()
     }
 
-    /** Garantiza que el código esté descomprimido en la carpeta de la corrida. */
+    /**
+     * Garantiza que el código esté descomprimido en la carpeta de la corrida.
+     *
+     * El trabajo pesado lo hace el helper compartido (`./rehidratar`), que es el
+     * mismo que usan `index_code` y `run_checks` cuando la carpeta se evaporó
+     * entre invocaciones. Acá se le pasa el plan de fuentes propio de la
+     * ingesta, que además del respaldo en Storage sabe ir al repositorio.
+     */
     const asegurarCodigo = async (): Promise<{ stack: StackInfo; ingesta: ResultadoIngesta | null }> => {
       if (ingesta) return { stack: ingesta.stack, ingesta }
 
-      if (await hayCodigoEnDisco(codeDir)) {
-        ctx.log('El código de esta corrida ya estaba listo: no hizo falta traerlo de nuevo.')
-        return { stack: await detectStack(codeDir), ingesta: null }
-      }
-
-      const bytes = await conseguirArchivo()
-      ingesta = await ingestar({
+      const asegurado = await asegurarCodigoEnDisco({
         projectId,
-        runId: analysisRunId,
-        fuente: { tipo: 'archivo', bytes },
+        analysisRunId,
+        repoPath: codeDir,
+        log: ctx.log,
+        conseguirArchivo,
+        almacen,
+        db: async () => db,
       })
-      for (const aviso of ingesta.avisos) ctx.log(aviso)
-      for (const descarte of ingesta.descartes) {
-        ctx.log(`Dejamos afuera ${descarte.cantidad} archivo(s): ${descarte.mensajePlain}`)
-      }
+
+      if (!asegurado.ingesta) return { stack: await detectStack(asegurado.codeDir), ingesta: null }
+
+      ingesta = asegurado.ingesta
       return { stack: ingesta.stack, ingesta }
     }
 
@@ -436,9 +429,6 @@ export function crearHandlerIngestRepo(
               const siguiente: IndexCodePayload = {
                 repoPath: codeDir,
                 deployedUrl: (payload.deployedUrl ?? proyecto.deployedUrl) || null,
-                databaseUrl:
-                  payload.databaseUrl ??
-                  (await leerConexionBase(db, projectId, ctx, descifrar)),
               }
 
               await enqueue({
@@ -811,44 +801,6 @@ async function yaHayAnalisisEncolado(
     return false
   }
   return Boolean(data)
-}
-
-async function leerConexionBase(
-  db: JobsDb,
-  projectId: string,
-  ctx: JobContext,
-  descifrar: (credencial: string) => Promise<string>,
-): Promise<string | null> {
-  const { data, error } = await db
-    .from(T.projectConnections)
-    .select('credentials_ref')
-    .eq('project_id', projectId)
-    .eq('provider', 'supabase')
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle()
-
-  if (error) {
-    ctx.log(
-      `No pudimos leer la conexión a tu base (${describeDbError(error)}). ` +
-        'El análisis sigue, pero sin comprobar quién puede ver qué.',
-    )
-    return null
-  }
-
-  const credencial = (data as Record<string, unknown> | null)?.credentials_ref
-  if (!credencial) return null
-
-  try {
-    const url = await descifrar(String(credencial))
-    return url.trim() || null
-  } catch (error) {
-    ctx.log(
-      `No pudimos leer la conexión a tu base guardada (${describeError(error)}). ` +
-        'El análisis sigue, pero sin comprobar quién puede ver qué.',
-    )
-    return null
-  }
 }
 
 /* ── Costo ────────────────────────────────────────────────────────────── */

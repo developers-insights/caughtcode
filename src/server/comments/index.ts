@@ -45,6 +45,13 @@ export interface ScanProjectOptions {
   routes?: RouteInfo[]
   /** Si no se pasa, se detecta mirando el repo. */
   framework?: FrameworkKind
+  /**
+   * Cómo se le devuelve el turno al event loop entre archivo y archivo. Existe
+   * para poder verificar en un test que el escaneo de verdad lo suelta: que lo
+   * haga no es un detalle interno, es lo que permite que el latido del trabajo y
+   * el tope de tiempo del handler puedan dispararse (ver `cederElTurno()`).
+   */
+  ceder?: () => Promise<void>
 }
 
 export interface CleanProjectOptions extends ScanProjectOptions {
@@ -66,6 +73,22 @@ export function detectFramework(repoPath: string): FrameworkKind {
   return 'unknown'
 }
 
+/**
+ * Le devuelve el turno al event loop.
+ *
+ * `scanFile` es **sincrónico** y `pLimit` encadena con promesas, o sea con
+ * microtareas: sin esto, analizar N archivos es un solo bloque de CPU que no
+ * suelta el hilo ni una vez. Los temporizadores viven en otra fase del loop y no
+ * llegan a dispararse — ni el latido de fondo que renueva el permiso del trabajo
+ * (`runClaimedJob`, cada 15 s), ni el tope de tiempo que el propio handler le
+ * pone a este escaneo. Los dos controles existían y ninguno de los dos podía
+ * actuar. Un `setImmediate` por archivo cuesta nada al lado de tokenizar el
+ * archivo entero, y hace que los dos vuelvan a funcionar.
+ */
+function cederElTurno(): Promise<void> {
+  return new Promise((resolver) => setImmediate(resolver))
+}
+
 async function scanAll(repoPath: string, opts: ScanProjectOptions): Promise<ScannedFile[]> {
   const files = await walkRepo(repoPath)
   const ctx: ReachContext = {
@@ -73,7 +96,15 @@ async function scanAll(repoPath: string, opts: ScanProjectOptions): Promise<Scan
     routes: opts.routes,
   }
   const limit = pLimit(CONCURRENCY)
-  return Promise.all(files.map((f) => limit(() => scanFile({ file: f.rel, text: f.text }, ctx))))
+  const ceder = opts.ceder ?? cederElTurno
+  return Promise.all(
+    files.map((f) =>
+      limit(async () => {
+        await ceder()
+        return scanFile({ file: f.rel, text: f.text }, ctx)
+      }),
+    ),
+  )
 }
 
 /** Analiza el repo entero y devuelve los comentarios con su alcance y su riesgo. */

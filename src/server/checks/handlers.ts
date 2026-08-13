@@ -39,6 +39,9 @@ import type {
   RunCoverage,
   StackInfo,
 } from '@/lib/types/domain'
+import { rutaDelCodigo } from '@/server/ingest'
+import { leerConexionBase } from '@/server/ingest/conexion'
+import { asegurarCodigoEnDisco } from '@/server/ingest/rehidratar'
 import { describeError, enqueue, registerHandler, runStages } from '@/server/jobs'
 import type { JobContext, JobHandler, StageStore } from '@/server/jobs'
 import { describeDbError, jobsDb, type JobsDb } from '@/server/jobs/db'
@@ -63,7 +66,12 @@ export interface RunChecksPayload {
   repoPath: string
   /** Dirección de la app publicada, si el usuario la dio. */
   deployedUrl?: string | null
-  /** Conexión de **solo lectura** a la base del usuario, si la conectó. */
+  /**
+   * @deprecated Solo para los trabajos que quedaron encolados con el secreto
+   * adentro. La conexión a la base ya no viaja en el payload —cualquier miembro
+   * de la organización puede leer `jobs.payload`—: se resuelve al usarla, con
+   * `leerConexionBase()`. Ver `@/server/ingest/conexion`.
+   */
   databaseUrl?: string | null
   /**
    * Lo que observó el agente de navegación. Las sesiones se leen de la base;
@@ -84,6 +92,10 @@ export interface DependenciasRunChecks {
   checks?: Check[]
   /** Cómo se encolan los videos. Se inyecta en los tests. */
   encolar?: typeof enqueue
+  /** Cómo se garantiza que el código esté en disco. Se inyecta en los tests. */
+  asegurar?: typeof asegurarCodigoEnDisco
+  /** Cómo se resuelve la conexión a la base del usuario. Se inyecta en los tests. */
+  conexion?: typeof leerConexionBase
 }
 
 /* ── Etapas: el texto lo lee el usuario ───────────────────────────────── */
@@ -114,6 +126,7 @@ export function crearHandlerRunChecks(
           run: async () => {
             const db = await abrirDb()
             const index = await leerCodeIndex(db, analysisRunId)
+            exigirIndiceConArchivos(index)
             return { archivos: index.fileCount, rutas: index.routes.length }
           },
         },
@@ -123,7 +136,8 @@ export function crearHandlerRunChecks(
           progress: 90,
           run: async (helper) => {
             const db = await abrirDb()
-            const resultado = await revisar(db, payload, ctx, deps, helper.heartbeat)
+            const conCodigo = await conCodigoEnDisco(payload, ctx, deps)
+            const resultado = await revisar(db, conCodigo, ctx, deps, helper.heartbeat)
             const guardados = await guardarHallazgos(db, ctx, analysisRunId, resultado, deps)
             return resumenDe(resultado, guardados, deps.checks ?? CHEQUEOS)
           },
@@ -155,7 +169,15 @@ export function crearHandlerRunChecks(
           name: 'encolar_videos',
           label: ETAPAS.videos,
           progress: 100,
-          run: async () => encolarVideos(await abrirDb(), payload, ctx, deps),
+          // Sin rehidratar: esta etapa no lee ni un archivo. Antes llamaba a
+          // `conCodigoEnDisco` para calcular una ruta —bajaba y descomprimía el
+          // repo entero para eso— y, si la copia de Storage no estaba, tiraba
+          // `sin_copia_guardada` sin reintento con los hallazgos ya guardados y
+          // las tres etapas anteriores hechas. La corrida terminaba en `partial`
+          // con mensaje de error cuando la revisión había salido entera y solo
+          // faltaban los videos, justo lo contrario de lo que decide
+          // `encolarVideos()`: que no salgan los videos no invalida la revisión.
+          run: async () => encolarVideos(await abrirDb(), ctx, deps),
         },
       ],
       deps.store ? { store: deps.store } : {},
@@ -171,6 +193,59 @@ function exigirCorrida(ctx: JobContext): string {
     })
   }
   return ctx.analysisRunId
+}
+
+/* ── Que haya código de verdad ────────────────────────────────────────── */
+
+/**
+ * Un índice con cero archivos no habilita a decir "revisado".
+ *
+ * Tentación descartada: dejar que el registro lo trate como insumo faltante.
+ * `detectarInsumos()` ya hace justo eso —con `fileCount === 0` marca
+ * `code: false`— y los chequeos de código se saltean solos con
+ * `INSUMO_FALTANTE.code`. Ese camino existe para lo que el usuario **eligió no
+ * darnos**: no conectó la base, no pasó la dirección de su app. El código sí nos
+ * lo dio. Presentar una falla nuestra como una decisión suya deja la corrida en
+ * "exitosa" con cero hallazgos, que es exactamente el informe en blanco que este
+ * arreglo viene a eliminar.
+ *
+ * Sin reintento: el índice vacío ya está escrito en la base y volver a leerlo da
+ * lo mismo. Lo que destraba esto es lanzar la revisión de nuevo, que rehace el
+ * índice desde el código.
+ */
+function exigirIndiceConArchivos(index: CodeIndex): void {
+  if (index.fileCount > 0) return
+  throw new JobError(
+    'No pudimos leer el código de tu proyecto, así que no hay nada para revisar. Volvé a lanzar la revisión y lo traemos de nuevo.',
+    { retryable: false, code: 'indice_vacio' },
+  )
+}
+
+/**
+ * El mismo payload, pero con `repoPath` apuntando a código que existe de verdad.
+ *
+ * La carpeta que dejó `ingest_repo` puede haberse evaporado: cada trabajo de la
+ * cadena corre en su propia invocación y en producción el disco es efímero. Los
+ * chequeos que leen archivos no fallarían por eso, simplemente no encontrarían
+ * nada — que es el peor resultado posible.
+ */
+async function conCodigoEnDisco(
+  payload: RunChecksPayload,
+  ctx: JobContext,
+  deps: DependenciasRunChecks,
+): Promise<RunChecksPayload> {
+  // Sin proyecto no hay dónde buscar la copia guardada; se sigue con lo que vino.
+  if (!ctx.projectId || !ctx.analysisRunId) return payload
+
+  const { codeDir, rehidratado } = await (deps.asegurar ?? asegurarCodigoEnDisco)({
+    projectId: ctx.projectId,
+    analysisRunId: ctx.analysisRunId,
+    repoPath: payload.repoPath,
+    log: ctx.log,
+  })
+
+  if (rehidratado) ctx.log('Tu código ya está de nuevo acá: seguimos con la revisión.')
+  return codeDir === payload.repoPath ? payload : { ...payload, repoPath: codeDir }
 }
 
 /* ── Etapa 2a: correr los chequeos ────────────────────────────────────── */
@@ -190,6 +265,16 @@ async function revisar(
 
   await heartbeat(25)
 
+  // El secreto se resuelve acá y muere con el trabajo. `payload` solo se mira
+  // por los trabajos que quedaron encolados antes del cambio.
+  const databaseUrl =
+    payload.databaseUrl ??
+    (await (deps.conexion ?? leerConexionBase)({
+      db,
+      projectId: ctx.projectId,
+      log: ctx.log,
+    }))
+
   const deployedUrl = payload.deployedUrl ?? null
   const agent: AgentEvidence | undefined =
     sessions.length > 0 || payload.agentEvidence
@@ -203,7 +288,7 @@ async function revisar(
     index,
     stack,
     deployedUrl,
-    databaseUrl: payload.databaseUrl ?? null,
+    databaseUrl,
     readFile: async (relativa) => {
       // Nunca se sale de la carpeta del proyecto, venga de donde venga la ruta.
       const destino = path.resolve(payload.repoPath, relativa)
@@ -217,7 +302,7 @@ async function revisar(
     log: ctx.log,
     agent,
     http: deployedUrl ? (deps.http ?? sondaFetch) : undefined,
-    connect: payload.databaseUrl ? (deps.connect ?? conectarPg) : undefined,
+    connect: databaseUrl ? (deps.connect ?? conectarPg) : undefined,
     complete: deps.complete,
   }
 
@@ -485,8 +570,12 @@ async function leerStack(db: JobsDb, projectId: string | null): Promise<StackInf
 }
 
 /**
- * Las sesiones del agente. Si no hay ninguna, los chequeos que dependen de la
- * app publicada se saltean solos y el motor lo deja registrado.
+ * Las sesiones del agente. Si no hay ninguna —y tampoco vino evidencia en el
+ * payload—, `ctx.agent` queda sin definir, el insumo `browser_run` da `false` y
+ * los chequeos que leen lo que vio el navegador se saltean solos, con el motivo
+ * registrado. Ojo con confundirlo con `deployed_app`: ese solo mira que haya
+ * dirección, y con la dirección sola esos chequeos correrían sobre nada y se
+ * mostrarían como revisados (ver `INSUMO_FALTANTE` en `./registry`).
  */
 async function leerSesionesDelAgente(
   db: JobsDb,
@@ -544,14 +633,23 @@ interface ResumenVideos {
   salteados: number
 }
 
+/**
+ * No recibe el payload a propósito. Lo único que sacaba de ahí era `repoPath`,
+ * y no para leerlo: para armar el `workspaceDir` del trabajo de video. Esa
+ * carpeta ahora se deriva de los ids con `rutaDelCodigo()`, que no toca el disco
+ * y siempre cae adentro del workspace de este proyecto — el trabajo de video
+ * crea directorios ahí, y una ruta traída del payload podría apuntar a
+ * cualquier lado.
+ */
 export async function encolarVideos(
   db: JobsDb,
-  payload: RunChecksPayload,
   ctx: JobContext,
   deps: DependenciasRunChecks = {},
 ): Promise<ResumenVideos> {
   const analysisRunId = ctx.analysisRunId
   if (!analysisRunId || !ctx.projectId) return { encolados: 0, salteados: 0 }
+
+  const workspaceDir = rutaDelCodigo(ctx.projectId, analysisRunId)
 
   const { data, error } = await db
     .from(T.findings)
@@ -599,9 +697,9 @@ export async function encolarVideos(
         kind: 'generate_video',
         payload: {
           findingId,
-          // La carpeta del repo es el único lugar de trabajo que este handler
-          // conoce con seguridad y que existe. El motor crea `video/<id>/` adentro.
-          workspaceDir: payload.repoPath,
+          // El motor crea `video/<id>/` adentro. No hace falta que el código
+          // esté ahí: el guion sale del hallazgo y las grabaciones, de Storage.
+          workspaceDir,
           kind: 'finding',
         },
       })

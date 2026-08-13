@@ -27,6 +27,7 @@ import { crearHandlerIndexCode } from '@/server/analysis/handlers'
 import type { RunChecksPayload } from '@/server/checks/handlers'
 import { almacenEnMemoria, contextoDeTrabajo, DbFalsa } from '../fixtures/checks/db-falsa'
 import type { ContextoFalso, Fila } from '../fixtures/checks/db-falsa'
+import { codigoYaEnDisco } from '../fixtures/codigo'
 
 /* ── Dobles ───────────────────────────────────────────────────────────── */
 
@@ -174,12 +175,40 @@ describe('la cadena: el agente va antes que la revisión', () => {
     expect(siguiente!.agentEvidence?.pages?.[0]?.status).toBe(200)
   })
 
-  it('con app publicada, index_code encola el agente y NO la revisión', async () => {
+  /**
+   * Regresión de seguridad. Este handler nunca usó la conexión a la base del
+   * cliente: la recibía en el payload y la copiaba al payload de `run_checks`,
+   * dejándola en claro en una fila más de `jobs_caughtcode` — que cualquier
+   * miembro de la organización puede leer. Ahora no la reenvía, ni siquiera
+   * cuando le llega (trabajos encolados antes del cambio).
+   */
+  it('no copia la conexión a la base al payload de la revisión', async () => {
+    const db = baseLista()
+    setJobsDb(db)
+    const motor = motorFalso([sesion()])
+
+    const handler = crearHandlerRunBrowserAgent({
+      db: async () => db,
+      store: almacenEnMemoria().store,
+      storage: storageFalso(),
+      run: motor.run,
+    })
+
+    await handler({ ...PAYLOAD, databaseUrl: 'postgres://del-payload-viejo' }, contextoDeTrabajo())
+
+    const siguiente = payloadDeRunChecks(db)
+    expect(siguiente, 'no encoló la revisión').toBeDefined()
+    expect(siguiente).not.toHaveProperty('databaseUrl')
+    expect(JSON.stringify(siguiente)).not.toMatch(/postgres/)
+  })
+
+  it('con app publicada, index_code encola el agente para ya y la revisión diferida', async () => {
     const db = baseLista()
     setJobsDb(db)
 
     const handler = crearHandlerIndexCode({
       db: async () => db,
+      asegurar: codigoYaEnDisco(),
       build: async () => ({ index: indiceVacio(), stack: stackVacio(), stages: {} }),
       store: almacenEnMemoria().store,
     })
@@ -187,12 +216,90 @@ describe('la cadena: el agente va antes que la revisión', () => {
     await handler({ repoPath: '/tmp/proyecto', deployedUrl: URL_APP }, contextoDeTrabajo())
 
     const kinds = db.filasDe(T.jobs).map((j) => j.kind)
-    expect(kinds).toEqual(['run_browser_agent'])
+    expect(kinds).toEqual(['run_browser_agent', 'run_checks'])
 
-    // El agente necesita estos datos para poder encolar la revisión después.
+    // La revisión no está disponible todavía: es la red por si el agente nunca
+    // corre, no una segunda revisión compitiendo con él.
+    const revision = db.filasDe(T.jobs)[1] as Record<string, any>
+    expect(new Date(revision.run_after).getTime()).toBeGreaterThan(Date.now())
+
+    // El agente necesita estos datos para poder adelantar la revisión después.
     const payload = db.filasDe(T.jobs)[0]!.payload as RunBrowserAgentPayload
     expect(payload.repoPath).toBe('/tmp/proyecto')
     expect(payload.deployedUrl).toBe(URL_APP)
+  })
+
+  /**
+   * La cadena entera, que es lo que de verdad importa: `index_code` deja la red
+   * esperando y el agente la adelanta con la evidencia adentro. Tiene que quedar
+   * **un** `run_checks`, listo para correr ya.
+   */
+  it('el agente adelanta la red que dejó index_code, sin crear una segunda revisión', async () => {
+    const db = baseLista()
+    setJobsDb(db)
+
+    const indexar = crearHandlerIndexCode({
+      db: async () => db,
+      asegurar: codigoYaEnDisco(),
+      build: async () => ({ index: indiceVacio(), stack: stackVacio(), stages: {} }),
+      store: almacenEnMemoria().store,
+    })
+    await indexar({ repoPath: '/tmp/proyecto', deployedUrl: URL_APP }, contextoDeTrabajo())
+
+    const motor = motorFalso([sesion()], conRastreador)
+    const probar = crearHandlerRunBrowserAgent({
+      db: async () => db,
+      store: almacenEnMemoria().store,
+      storage: storageFalso(),
+      run: motor.run,
+    })
+    await probar(PAYLOAD, contextoDeTrabajo())
+
+    const revisiones = trabajosDe(db, 'run_checks')
+    expect(revisiones, 'la revisión se duplicó o desapareció').toHaveLength(1)
+
+    const revision = revisiones[0] as Record<string, any>
+    expect(new Date(revision.run_after).getTime()).toBeLessThanOrEqual(Date.now())
+    expect(revision.status).toBe('queued')
+
+    const siguiente = revision.payload as RunChecksPayload
+    expect(siguiente.agentEvidence?.network?.length, 'la evidencia no entró al payload').toBeGreaterThan(0)
+  })
+
+  /**
+   * La carrera: la red venció y otro worker ya se llevó la revisión mientras el
+   * agente terminaba. No se encola una segunda —dos revisiones se pelean las
+   * mismas filas de `findings`— y queda dicho que esta corrida se quedó sin la
+   * evidencia del navegador.
+   */
+  it('si la revisión ya arrancó por su cuenta, no se encola otra', async () => {
+    const db = baseLista()
+    setJobsDb(db)
+
+    const indexar = crearHandlerIndexCode({
+      db: async () => db,
+      asegurar: codigoYaEnDisco(),
+      build: async () => ({ index: indiceVacio(), stack: stackVacio(), stages: {} }),
+      store: almacenEnMemoria().store,
+    })
+    await indexar({ repoPath: '/tmp/proyecto', deployedUrl: URL_APP }, contextoDeTrabajo())
+
+    // Otro worker se la llevó: exactamente lo que hace `claim_job`.
+    const red = db.filasDe(T.jobs).find((j) => j.kind === 'run_checks')!
+    red.status = 'running'
+
+    const ctx = contextoDeTrabajo()
+    const probar = crearHandlerRunBrowserAgent({
+      db: async () => db,
+      store: almacenEnMemoria().store,
+      storage: storageFalso(),
+      run: motorFalso([sesion()], conRastreador).run,
+    })
+    await probar(PAYLOAD, ctx)
+
+    expect(trabajosDe(db, 'run_checks')).toHaveLength(1)
+    expect(red.status).toBe('running')
+    expect(ctx.registro.join(' ')).toMatch(/ya había arrancado/i)
   })
 
   it('sin app publicada, index_code encola la revisión directo', async () => {
@@ -201,6 +308,7 @@ describe('la cadena: el agente va antes que la revisión', () => {
 
     const handler = crearHandlerIndexCode({
       db: async () => db,
+      asegurar: codigoYaEnDisco(),
       build: async () => ({ index: indiceVacio(), stack: stackVacio(), stages: {} }),
       store: almacenEnMemoria().store,
     })

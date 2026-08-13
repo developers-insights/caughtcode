@@ -21,7 +21,7 @@ export const trackersBeforeConsent = defineCheck({
   id: 'sto.trackers_before_consent',
   pillar: 'store_hygiene',
   name: 'trackers-before-consent',
-  requires: ['deployed_app'],
+  requires: ['deployed_app', 'browser_run'],
   async run(ctx): Promise<FindingDraft[]> {
     const pedidos = (ctx.agent?.network ?? []).filter(
       (p) => p.beforeConsent && trackerDeHost(p.url) !== null,

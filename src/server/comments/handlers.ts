@@ -74,14 +74,30 @@ export const MAX_HITS_GUARDADOS = 20_000
 /**
  * Si la revisión entera tarda más que esto, se corta y se avisa.
  *
- * A propósito bien por debajo de `DEFAULT_LEASE_SECONDS` (300 s, ver
- * `jobs/queue.ts`): `runStages` renueva el permiso del trabajo recién AL
- * EMPEZAR esta etapa, y adentro no hay otro latido hasta que termine. Si este
- * tope estuviera cerca de los 300 s, una revisión lenta pero legítima podría
- * perder el permiso a mitad de camino y otro trabajador se llevaría el mismo
- * trabajo por delante.
+ * ## Por qué tiene que quedar por debajo del arriendo
+ *
+ * El permiso del trabajo (`DEFAULT_LEASE_SECONDS`) dura 90 s. Sí hay un latido
+ * de fondo que lo renueva cada 15 s sin que el handler haga nada —el
+ * `setInterval` de `runClaimedJob`, en `jobs/runner.ts`—, así que la vieja
+ * versión de este comentario ("adentro no hay otro latido hasta que termine")
+ * era falsa. Pero apoyarse en ese latido para pasarse del arriendo tampoco
+ * servía, y la razón es la parte fina: `scanFile` es sincrónico y `pLimit`
+ * encadena con microtareas, así que el escaneo era un bloque de CPU que no
+ * soltaba el hilo. Los temporizadores están en otra fase del event loop: ni el
+ * latido ni el `Promise.race` de `conTiempoLimite()` podían dispararse mientras
+ * duraba. Con el tope en 120 s y el arriendo en 90, un escaneo largo perdía el
+ * permiso, otro worker se llevaba el mismo trabajo por delante, y el tope que
+ * debía cortarlo tampoco existía en la práctica.
+ *
+ * Se arregló por los dos lados: `scanAll()` ahora cede el turno entre archivo y
+ * archivo (ver `cederElTurno()` en `../comments/index.ts`), y este tope pasó a
+ * quedar donde decía que estaba: **por debajo** del arriendo, con margen para
+ * que el corte llegue antes que la pérdida del permiso.
+ *
+ * `tests/comments/handler.test.ts` verifica la relación entre los dos números:
+ * si alguien vuelve a bajar el arriendo, se entera acá y no en producción.
  */
-export const TIEMPO_MAXIMO_ESCANEO_MS = 2 * 60 * 1000
+export const TIEMPO_MAXIMO_ESCANEO_MS = 60 * 1000
 
 /* ── Etapas: el texto lo lee el usuario ───────────────────────────────── */
 

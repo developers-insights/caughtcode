@@ -15,12 +15,13 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import type { CodeIndex, StackInfo } from '@/lib/types/domain'
-import { crearHandlerIndexCode } from '@/server/analysis/handlers'
+import { crearHandlerIndexCode, DIFERIMIENTO_RED_MS } from '@/server/analysis/handlers'
 import type { IndexCodePayload } from '@/server/analysis/handlers'
 import { T } from '@/lib/db/tablas'
-import { MAX_STAGE_RESULT_BYTES, STAGE_RESULTS_KEY } from '@/server/jobs'
+import { ESPERA_MAXIMA_EN_COLA_MS, MAX_STAGE_RESULT_BYTES, STAGE_RESULTS_KEY } from '@/server/jobs'
 import { setJobsDb } from '@/server/jobs/db'
 import { almacenEnMemoria, contextoDeTrabajo, DbFalsa } from '../fixtures/checks/db-falsa'
+import { codigoYaEnDisco } from '../fixtures/codigo'
 
 /* ── Ayudas ───────────────────────────────────────────────────────────── */
 
@@ -90,7 +91,7 @@ describe('handler de index_code', () => {
     setJobsDb(db)
     const { store } = almacenEnMemoria()
 
-    const handler = crearHandlerIndexCode({ db: async () => db, build: buildFalso(), store })
+    const handler = crearHandlerIndexCode({ db: async () => db, asegurar: codigoYaEnDisco(), build: buildFalso(), store })
     await handler(PAYLOAD, contextoDeTrabajo())
 
     const filas = db.filasDe(T.codeIndex)
@@ -109,7 +110,7 @@ describe('handler de index_code', () => {
     const db = baseLista()
     setJobsDb(db)
 
-    const handler = crearHandlerIndexCode({ db: async () => db, build: buildFalso(), store: almacenEnMemoria().store })
+    const handler = crearHandlerIndexCode({ db: async () => db, asegurar: codigoYaEnDisco(), build: buildFalso(), store: almacenEnMemoria().store })
     // Dos trabajos distintos sobre la misma corrida: es el caso real de un
     // reintento después de que el worker se murió.
     await handler(PAYLOAD, contextoDeTrabajo({ jobId: 'trabajo-1' }))
@@ -122,7 +123,7 @@ describe('handler de index_code', () => {
     const db = baseLista()
     setJobsDb(db)
 
-    const handler = crearHandlerIndexCode({ db: async () => db, build: buildFalso(), store: almacenEnMemoria().store })
+    const handler = crearHandlerIndexCode({ db: async () => db, asegurar: codigoYaEnDisco(), build: buildFalso(), store: almacenEnMemoria().store })
     await handler(PAYLOAD, contextoDeTrabajo())
 
     const encolados = db.filasDe(T.jobs) as Array<Record<string, any>>
@@ -131,32 +132,141 @@ describe('handler de index_code', () => {
   })
 
   /**
-   * Con la app publicada, la revisión NO se encola acá: la encola el agente de
-   * navegación cuando termina, pasándole lo que vio (cookies, pedidos de red,
-   * accesibilidad). Si las dos salieran juntas, la revisión podría correr antes
-   * de que exista esa evidencia y saltearía justo los chequeos que dependen de
-   * usar la app de verdad — que son los que el producto promete.
+   * Con la app publicada salen las dos, pero no a la par: el agente para ya y la
+   * revisión diferida, de red. Si salieran juntas y disponibles, la revisión
+   * ganaría la carrera y saltearía los chequeos que dependen de lo que ve el
+   * navegador. Si saliera solo el agente —como estaba antes—, un agente que
+   * nunca corre (no hay navegador en la función serverless) dejaba al usuario
+   * sin ninguna revisión.
    */
-  it('con la app publicada encola solo el agente de navegación, que después encadena la revisión', async () => {
+  it('con la app publicada encola el agente para ya y la revisión diferida, de red', async () => {
     const db = baseLista()
     setJobsDb(db)
+    const antes = Date.now()
 
-    const handler = crearHandlerIndexCode({ db: async () => db, build: buildFalso(), store: almacenEnMemoria().store })
+    const handler = crearHandlerIndexCode({ db: async () => db, asegurar: codigoYaEnDisco(), build: buildFalso(), store: almacenEnMemoria().store })
     await handler(
       { ...PAYLOAD, deployedUrl: 'https://mi-app.vercel.app' },
       contextoDeTrabajo(),
     )
 
+    const encolados = db.filasDe(T.jobs) as Array<Record<string, any>>
+    expect(encolados.map((j) => j.kind)).toEqual(['run_browser_agent', 'run_checks'])
+
+    const agente = encolados[0]!
+    expect(new Date(agente.run_after).getTime()).toBeLessThanOrEqual(Date.now())
+
+    const revision = encolados[1]!
+    const espera = new Date(revision.run_after).getTime() - antes
+    expect(espera).toBeGreaterThanOrEqual(DIFERIMIENTO_RED_MS)
+    // La revisión de red necesita saber que hay app publicada: es lo que hace
+    // que los chequeos que sí funcionan por HTTP igual corran.
+    expect(revision.payload.deployedUrl).toBe('https://mi-app.vercel.app')
+  })
+
+  /**
+   * El diferimiento tiene que caer entre dos números del sistema. Si se pasa de
+   * los 30 minutos, `vencerEncoladosDesatendidos()` da por perdida la red antes
+   * de que llegue a correr y la corrida cierra sin un solo hallazgo — el bug que
+   * la red viene a tapar. Este test es el que avisa si alguien mueve cualquiera
+   * de los dos números sin mirar el otro.
+   */
+  it('el diferimiento de la red cae por debajo del umbral de abandono', () => {
+    expect(DIFERIMIENTO_RED_MS).toBeLessThan(ESPERA_MAXIMA_EN_COLA_MS)
+    // Y por encima del peor agente posible: 10 tareas × 90 s de tope cada una.
+    expect(DIFERIMIENTO_RED_MS).toBeGreaterThan(10 * 90_000)
+  })
+
+  /**
+   * Idempotencia del encadenado. Un handler puede correr dos veces —el worker se
+   * murió después de encolar y antes de guardar el avance de la etapa— y dos
+   * `run_checks` de la misma corrida son dos revisiones borrando y reinsertando
+   * los mismos `findings` al mismo tiempo.
+   */
+  it('dos corridas del handler no dejan dos veces los mismos trabajos encolados', async () => {
+    const db = baseLista()
+    setJobsDb(db)
+
+    const handler = crearHandlerIndexCode({ db: async () => db, asegurar: codigoYaEnDisco(), build: buildFalso(), store: almacenEnMemoria().store })
+    const conApp = { ...PAYLOAD, deployedUrl: 'https://mi-app.vercel.app' }
+
+    // Almacén de etapas distinto por trabajo: así el segundo intento vuelve a
+    // pasar por `encadenar` de verdad, que es el caso que importa.
+    await handler(conApp, contextoDeTrabajo({ jobId: 'trabajo-1' }))
+    await handler(conApp, contextoDeTrabajo({ jobId: 'trabajo-2' }))
+
     const kinds = (db.filasDe(T.jobs) as Array<Record<string, any>>).map((j) => j.kind)
-    expect(kinds).toContain('run_browser_agent')
-    expect(kinds).not.toContain('run_checks')
+    expect(kinds).toEqual(['run_browser_agent', 'run_checks'])
+  })
+
+  /**
+   * Regresión de seguridad. La conexión de solo lectura a la base del cliente
+   * viajaba **en claro** en `jobs.payload`, y esa tabla la lee cualquier miembro
+   * de la organización: el rol más bajo del equipo se llevaba la cadena de
+   * conexión con un `GET`. Ahora cada trabajo que la necesita la resuelve en el
+   * momento y nunca la copia a otro payload.
+   */
+  describe('la conexión a la base del cliente no se escribe en ningún payload', () => {
+    it('la resuelve él mismo para leer el esquema, y no la reenvía', async () => {
+      const db = baseLista()
+      setJobsDb(db)
+      let vistaPorElMotor: string | null | undefined
+
+      const handler = crearHandlerIndexCode({
+        db: async () => db,
+        asegurar: codigoYaEnDisco(),
+        store: almacenEnMemoria().store,
+        conexion: async () => 'postgres://solo-lectura',
+        build: async (opciones) => {
+          vistaPorElMotor = opciones.databaseUrl
+          return { index: indiceFalso(), stack: STACK, stages: {} }
+        },
+      })
+      await handler({ ...PAYLOAD, deployedUrl: 'https://mi-app.vercel.app' }, contextoDeTrabajo())
+
+      expect(vistaPorElMotor, 'el motor se quedó sin conexión').toBe('postgres://solo-lectura')
+
+      const encolado = (db.filasDe(T.jobs) as Array<Record<string, any>>)[0]
+      expect(encolado.payload).not.toHaveProperty('databaseUrl')
+      expect(JSON.stringify(encolado.payload)).not.toMatch(/postgres/)
+    })
+
+    /**
+     * Compatibilidad: los trabajos que ya estaban en la cola cuando salió el
+     * cambio traen el secreto adentro. Se usa el que vino —volver a resolverlo
+     * sería una consulta de más— pero no se propaga ni un paso más.
+     */
+    it('un trabajo viejo con el secreto en el payload funciona igual y corta la cadena ahí', async () => {
+      const db = baseLista()
+      setJobsDb(db)
+      let vistaPorElMotor: string | null | undefined
+
+      const handler = crearHandlerIndexCode({
+        db: async () => db,
+        asegurar: codigoYaEnDisco(),
+        store: almacenEnMemoria().store,
+        conexion: async () => {
+          throw new Error('no hacía falta volver a resolverla')
+        },
+        build: async (opciones) => {
+          vistaPorElMotor = opciones.databaseUrl
+          return { index: indiceFalso(), stack: STACK, stages: {} }
+        },
+      })
+      await handler({ ...PAYLOAD, databaseUrl: 'postgres://del-payload-viejo' }, contextoDeTrabajo())
+
+      expect(vistaPorElMotor).toBe('postgres://del-payload-viejo')
+
+      const encolado = (db.filasDe(T.jobs) as Array<Record<string, any>>)[0]
+      expect(JSON.stringify(encolado.payload)).not.toMatch(/postgres/)
+    })
   })
 
   it('sin corrida asociada falla con un mensaje entendible y no reintenta', async () => {
     const db = baseLista()
     setJobsDb(db)
 
-    const handler = crearHandlerIndexCode({ db: async () => db, build: buildFalso(), store: almacenEnMemoria().store })
+    const handler = crearHandlerIndexCode({ db: async () => db, asegurar: codigoYaEnDisco(), build: buildFalso(), store: almacenEnMemoria().store })
 
     await expect(
       handler(PAYLOAD, contextoDeTrabajo({ analysisRunId: null })),
@@ -170,7 +280,7 @@ describe('handler de index_code', () => {
     setJobsDb(db)
     const ctx = contextoDeTrabajo()
 
-    const handler = crearHandlerIndexCode({ db: async () => db, build: buildFalso(), store: almacenEnMemoria().store })
+    const handler = crearHandlerIndexCode({ db: async () => db, asegurar: codigoYaEnDisco(), build: buildFalso(), store: almacenEnMemoria().store })
     await handler(PAYLOAD, ctx)
 
     const etiquetas = ctx.etapas.map((e) => e.stage).filter(Boolean) as string[]
@@ -230,6 +340,7 @@ describe('handler de index_code', () => {
 
       const handler = crearHandlerIndexCode({
         db: async () => db,
+        asegurar: codigoYaEnDisco(),
         build: buildFalso(grande),
         store: almacenEnMemoria().store,
       })
@@ -252,6 +363,7 @@ describe('handler de index_code', () => {
 
       const handler = crearHandlerIndexCode({
         db: async () => db,
+        asegurar: codigoYaEnDisco(),
         build: buildFalso(indiceGrande()),
         store,
       })
@@ -279,7 +391,7 @@ describe('handler de index_code', () => {
     setJobsDb(db)
     const ctx = contextoDeTrabajo()
 
-    const handler = crearHandlerIndexCode({ db: async () => db, build: buildFalso(), store: almacenEnMemoria().store })
+    const handler = crearHandlerIndexCode({ db: async () => db, asegurar: codigoYaEnDisco(), build: buildFalso(), store: almacenEnMemoria().store })
     await handler(PAYLOAD, ctx)
 
     expect(ctx.registro.join(' ')).toMatch(/analizador de sintaxis/i)

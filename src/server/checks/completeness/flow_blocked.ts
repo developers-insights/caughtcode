@@ -18,7 +18,7 @@ export const flowBlocked = defineCheck({
   id: 'cmp.flow_blocked',
   pillar: 'completeness',
   name: 'flow-blocked',
-  requires: ['deployed_app'],
+  requires: ['deployed_app', 'browser_run'],
   async run(ctx): Promise<FindingDraft[]> {
     const sesiones = ctx.agent?.sessions ?? []
     const drafts: FindingDraft[] = []

@@ -22,7 +22,7 @@ export const noEmailVerification = defineCheck({
   id: 'cmp.no_email_verification',
   pillar: 'completeness',
   name: 'no-email-verification',
-  requires: ['code', 'deployed_app'],
+  requires: ['code', 'deployed_app', 'browser_run'],
   async run(ctx): Promise<FindingDraft[]> {
     const registro = sesion(ctx.agent, 'signup')
     if (!registro) return []
