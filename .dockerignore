@@ -1,0 +1,72 @@
+# ============================================================================
+# Lo que NO tiene que viajar a la imagen del worker.
+# Ver Dockerfile: usa `COPY . .` amplio, así que esta lista es lo único que
+# lo mantiene liviano y sin secretos ni artefactos locales.
+# ============================================================================
+
+# Dependencias — se reinstalan adentro de la imagen con --frozen-lockfile
+node_modules/
+
+# Build de Next — el worker no corre `next build`, no lo necesita
+.next/
+out/
+
+# Control de versiones
+.git/
+.gitignore
+
+# Entorno — NUNCA tiene que llegar a una imagen
+.env
+.env.*
+!.env.example
+
+# Almacenamiento local de corridas (efímero por diseño, ver src/server/ingest/workspace.ts)
+.caughtcode-storage/
+
+# Salidas de análisis / video generadas en local.
+# OJO: NO excluir toda la carpeta `video/` — `video/template/` (escena.css,
+# escena.js, fallback-tokens.css) lo lee en runtime
+# `src/server/video/render/page.ts` (función `cargarRecursos`), resuelto desde
+# la raíz del repo. Si esa carpeta no viaja en la imagen, el renderer de video
+# revienta buscando esos tres archivos. Solo se excluye lo que es SALIDA
+# generada, no la plantilla fuente.
+graphify-out/
+video/out/
+
+# Tests — no corren adentro del contenedor de producción
+tests/
+playwright-report/
+test-results/
+coverage/
+*.lcov
+
+# TypeScript / tooling
+*.tsbuildinfo
+next-env.d.ts
+tsconfig.tsbuildinfo
+
+# Editores / sistema
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Vercel (no aplica al worker de Render)
+.vercel/
+
+# Documentación y metadata que no hace falta en runtime
+docs/
+README.md
+CLAUDE.md
+AGENTS.md
+
+# Claude Code / orquestación local
+.claude/
+.remember/
+scratchpad/
+tmp/
+
+# Supabase CLI local
+.branches/
+.temp/
+supabase/.temp/

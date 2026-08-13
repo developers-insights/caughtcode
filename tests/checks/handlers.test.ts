@@ -25,6 +25,7 @@ import {
   DbFalsa,
 } from '../fixtures/checks/db-falsa'
 import type { Fila } from '../fixtures/checks/db-falsa'
+import { codigoYaEnDisco } from '../fixtures/codigo'
 import {
   borrarProyecto,
   crearProyecto,
@@ -82,13 +83,23 @@ function checkFijo(id: string, drafts: FindingDraft[]): Check {
  * `payload` del trabajo y va a buscar el cliente real de Supabase. Uno por
  * handler, compartido entre las llamadas que haga ese handler — que es lo que
  * permite distinguir "otro trabajo" (rehace) de "el mismo reintentado" (saltea).
+ *
+ * `asegurar` también: estos tests le pasan una carpeta temporal cualquiera, y el
+ * helper de verdad ya no acepta una ruta que no cuelgue del workspace del
+ * proyecto (ver `esCarpetaDelProyecto` en `@/server/ingest/rehidratar`). Sin el
+ * doble, saldría a buscar la copia guardada en el Storage real.
  */
 function handlerCon(
   db: DbFalsa,
   extra: Partial<Parameters<typeof crearHandlerRunChecks>[0]> = {},
 ) {
   const { store } = almacenEnMemoria()
-  return crearHandlerRunChecks({ db: async () => db, store, ...extra })
+  return crearHandlerRunChecks({
+    db: async () => db,
+    store,
+    asegurar: codigoYaEnDisco(),
+    ...extra,
+  })
 }
 
 async function conRepo<T2>(
@@ -422,6 +433,61 @@ describe('cobertura de la corrida', () => {
     })
   })
 
+  /**
+   * La revisión de red: `index_code` la dejó agendada por si el agente de
+   * navegación nunca corría, y no corrió. Llega con la dirección de la app pero
+   * sin una sola observación del navegador.
+   *
+   * Lo que NO puede pasar es que los chequeos que leen lo que vio el agente se
+   * muestren como "revisado, sin problemas". Nadie miró cookies, ni rastreadores,
+   * ni cómo se ve en el celular. Tienen que quedar marcados como no revisados, y
+   * el motivo tiene que decir que fue algo que no pudimos hacer nosotros — no
+   * pedirle nada al usuario, que dio todo lo que había que dar.
+   */
+  it('sin la visita del agente, los chequeos que dependen de ella quedan como no revisados', async () => {
+    await conRepo({ 'app/page.tsx': 'export default () => null\n' }, async (repo) => {
+      const db = baseConIndice()
+      db.sembrar(T.analysisRuns, [{ id: 'corrida-1', project_id: 'proyecto-1' }])
+      db.sembrar(T.agentSessions, [])
+
+      const checks: Check[] = [
+        defineCheck({
+          id: 'sto.trackers_before_consent',
+          pillar: 'store_hygiene',
+          name: 'trackers',
+          requires: ['deployed_app', 'browser_run'],
+          run: async () => [],
+        }),
+        defineCheck({
+          id: 'cmp.broken_links',
+          pillar: 'completeness',
+          name: 'enlaces',
+          requires: ['deployed_app'],
+          run: async () => [],
+        }),
+      ]
+
+      await handlerCon(db, { checks })(
+        { repoPath: repo, deployedUrl: 'https://mi-app.vercel.app' },
+        contextoDeTrabajo(),
+      )
+
+      const [corrida] = db.filasDe(T.analysisRuns)
+      const coverage = corrida.coverage as {
+        entries: Array<{ checkId: string; status: string; reasonPlain?: string }>
+      }
+      const porId = new Map(coverage.entries.map((e) => [e.checkId, e]))
+
+      const sinAgente = porId.get('sto.trackers_before_consent')
+      expect(sinAgente?.status, 'un chequeo que no miró nada se mostró como revisado').toBe('salteado')
+      expect(sinAgente?.reasonPlain).toMatch(/no llegamos a recorrer tu app/i)
+
+      // El que sí puede trabajar solo con la dirección corre igual: la dirección
+      // está, lo que faltó fue el recorrido.
+      expect(porId.get('cmp.broken_links')?.status).toBe('sin_hallazgos')
+    })
+  })
+
   it('correrlo dos veces deja la cobertura de la última corrida, no las dos mezcladas', async () => {
     await conRepo({ 'app/page.tsx': 'export default () => null\n' }, async (repo) => {
       const db = baseConIndice()
@@ -446,7 +512,71 @@ describe('cobertura de la corrida', () => {
   })
 })
 
-/* ── 6. Enganche con la cola ──────────────────────────────────────────── */
+/* ── 6. El secreto no viaja: se resuelve al usarlo ────────────────────── */
+
+/**
+ * Regresión de seguridad. La conexión de solo lectura a la base del cliente
+ * llegaba **en claro** en `jobs.payload`, y esa tabla la lee cualquier miembro
+ * de la organización. Ahora `run_checks` la resuelve cuando la va a usar y el
+ * secreto vive en memoria lo que dura el trabajo.
+ */
+describe('la conexión a la base se resuelve al usarla, no viene en el payload', () => {
+  it('los chequeos la reciben aunque el payload no la traiga', async () => {
+    await conRepo({ 'app/page.tsx': 'export default () => null\n' }, async (repo) => {
+      const db = baseConIndice()
+      let vista: string | null | undefined
+
+      const mirón = defineCheck({
+        id: 'sec.rls_permissive',
+        pillar: 'security',
+        name: 'mirón',
+        requires: ['code'],
+        run: async (ctx) => {
+          vista = ctx.databaseUrl
+          return []
+        },
+      })
+
+      await handlerCon(db, {
+        checks: [mirón],
+        conexion: async () => 'postgres://solo-lectura',
+      })({ repoPath: repo }, contextoDeTrabajo())
+
+      expect(vista, 'se quedó sin conexión y el chequeo de permisos se saltea').toBe(
+        'postgres://solo-lectura',
+      )
+    })
+  })
+
+  it('un trabajo viejo con el secreto adentro sigue funcionando', async () => {
+    await conRepo({ 'app/page.tsx': 'export default () => null\n' }, async (repo) => {
+      const db = baseConIndice()
+      let vista: string | null | undefined
+
+      const mirón = defineCheck({
+        id: 'sec.rls_permissive',
+        pillar: 'security',
+        name: 'mirón',
+        requires: ['code'],
+        run: async (ctx) => {
+          vista = ctx.databaseUrl
+          return []
+        },
+      })
+
+      await handlerCon(db, {
+        checks: [mirón],
+        conexion: async () => {
+          throw new Error('no hacía falta volver a resolverla')
+        },
+      })({ repoPath: repo, databaseUrl: 'postgres://del-payload-viejo' }, contextoDeTrabajo())
+
+      expect(vista).toBe('postgres://del-payload-viejo')
+    })
+  })
+})
+
+/* ── 7. Enganche con la cola ──────────────────────────────────────────── */
 
 describe('enganche con la cola', () => {
   it('importar el módulo registra el handler de run_checks', async () => {

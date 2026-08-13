@@ -72,6 +72,12 @@ export interface JobView {
   /** Lo que dijo el motor al fallar. Ya viene escrito para el usuario. */
   lastError: string | null
   createdAt: string
+  /**
+   * Cuándo se tocó por última vez esta fila. Mientras el trabajo corre, el
+   * motor la toca con cada latido — es lo único que tenemos para saber si
+   * sigue vivo o si el proceso que lo tenía se murió sin avisar.
+   */
+  updatedAt: string
 }
 
 /**
@@ -92,6 +98,121 @@ export function esTrabajoDeRevision(trabajo: Pick<JobView, 'kind'>): boolean {
   return TRABAJOS_DE_REVISION.includes(trabajo.kind)
 }
 
+/* ── Corrida abandonada ────────────────────────────────────────────────── */
+
+/**
+ * Cuánto puede pasar sin un latido antes de dar por muerto un trabajo que la
+ * base todavía dice "corriendo".
+ *
+ * El número sale de la aritmética del motor, no de una intuición:
+ *
+ *   - el runner late cada 15 s (`HEARTBEAT_MS` en `src/server/jobs/runner.ts`)
+ *     y cada latido renueva el arriendo del trabajo;
+ *   - el arriendo dura 90 s (`DEFAULT_LEASE_SECONDS` en
+ *     `src/server/jobs/queue.ts`), o sea seis latidos perdidos seguidos;
+ *   - vencido el arriendo, `requeueExpired()` devuelve el trabajo a la cola en
+ *     el próximo tick, y el tick corre cada minuto.
+ *
+ * Un worker que se murió tiene entonces su trabajo de vuelta en la fila a los
+ * 150 s (90 + 60) de su último latido. Ahí esta pantalla lo ve `queued` y sigue
+ * mostrando progreso, que es exactamente lo correcto: el sistema se está
+ * curando solo y no hay nada que anunciar. Le damos lugar a un tick perdido
+ * —el candado puede estar tomado, o la instancia puede haberse muerto por
+ * memoria a mitad de tanda— y llegamos a 210 s. Redondeamos a 4 minutos.
+ *
+ * Pasado eso ya no queda nadie que lo vaya a rescatar (el cron está caído, o se
+ * acabaron los intentos sin que nadie escribiera el fallo), y esta pantalla es
+ * lo único que puede sacar al usuario de un spinner que gira para siempre.
+ *
+ * Eran 6 minutos, heredados de cuando el arriendo duraba 300 s. Ese arriendo ya
+ * no existe: el número no tenía por qué sobrevivirlo, y de hecho lo único que
+ * agregaba eran dos minutos de spinner de más.
+ */
+export const UMBRAL_SIN_LATIDO_MS = 4 * 60 * 1000
+
+/**
+ * Cuánto esperamos, con todos los trabajos ya terminados, antes de decir que la
+ * corrida quedó abierta y no la va a cerrar nadie.
+ *
+ * Ese cierre hoy lo hace el servidor solo: `barrerCorridasHuerfanas()` corre al
+ * principio de cada tick y cierra toda corrida `running` que no tenga un solo
+ * trabajo de revisión pendiente. Con el cron cada minuto, y dando lugar a un
+ * tick perdido, en 2 minutos ya está cerrada.
+ *
+ * Sin esta espera estaríamos corriendo una carrera contra el propio servidor: el
+ * usuario vería "Se cortó la revisión" y unos segundos después la misma pantalla
+ * se convertiría en un informe terminado. Un cartel de error que se desmiente
+ * solo enseña a no creerle a los carteles. Preferimos llegar tarde.
+ */
+export const GRACIA_CIERRE_MS = 2 * 60 * 1000
+
+/** ¿Este trabajo, que la base todavía dice que está corriendo, dejó de latir? */
+export function trabajoSinLatido(
+  trabajo: Pick<JobView, 'status' | 'updatedAt'>,
+  ahoraMs: number,
+): boolean {
+  if (trabajo.status !== 'running') return false
+  const ultimoLatido = Date.parse(trabajo.updatedAt)
+  if (!Number.isFinite(ultimoLatido)) return false
+  return ahoraMs - ultimoLatido > UMBRAL_SIN_LATIDO_MS
+}
+
+/**
+ * La corrida dice "corriendo" pero ya no hay nadie trabajándola de verdad.
+ *
+ * ## Por qué mira todos los trabajos y no el último
+ *
+ * Mirar solo el más nuevo valía mientras la cadena era estrictamente serial.
+ * Dejó de valer con el abanico de videos: `run_checks` encola hasta tres
+ * (`MAX_VIDEOS_POR_CORRIDA`) y el worker los toma de a dos, así que terminan en
+ * el orden en que tardan, no en el que se encolaron. Con el tercero terminando
+ * antes que el segundo, "el último trabajo" está `succeeded` mientras el segundo
+ * sigue renderizando tranquilo — y la pantalla anunciaba que la revisión se
+ * había cortado encima de un trabajo vivo.
+ *
+ * ## La regla
+ *
+ * Es un agregado sobre **todos** los trabajos de la revisión:
+ *
+ *   - si alguno espera turno, no está abandonada: puede estar por arrancar, o
+ *     puede ser uno que el servidor acaba de rescatar por arriendo vencido;
+ *   - si alguno corre, alcanza con que **uno solo** siga latiendo para que la
+ *     corrida esté viva. Abandonada solo si ninguno late;
+ *   - si no queda ninguno pendiente, la corrida quedó abierta sin nadie que la
+ *     cierre — pero eso lo arregla el servidor solo en ≤ `GRACIA_CIERRE_MS`, así
+ *     que recién después de esa espera lo decimos.
+ *
+ * Sin ningún trabajo propio no afirmamos nada — sin datos, la pantalla sigue
+ * mostrando el progreso normal en vez de acusar en falso.
+ */
+export function corridaAbandonada(
+  run: RunView | null,
+  trabajos: readonly JobView[],
+  ahoraMs: number = Date.now(),
+): boolean {
+  if (!estaCorriendo(run)) return false
+
+  const propios = trabajos.filter(esTrabajoDeRevision)
+  if (propios.length === 0) return false
+
+  if (propios.some((t) => t.status === 'queued')) return false
+
+  const corriendo = propios.filter((t) => t.status === 'running')
+  if (corriendo.length > 0) return corriendo.every((t) => trabajoSinLatido(t, ahoraMs))
+
+  // Todos terminaron y la corrida sigue abierta. La barrida del servidor la
+  // cierra sola enseguida; hablamos solo si ese plazo ya pasó.
+  const ultimoToque = propios.reduce((maximo, t) => {
+    const ms = Date.parse(t.updatedAt)
+    return Number.isFinite(ms) && ms > maximo ? ms : maximo
+  }, Number.NEGATIVE_INFINITY)
+
+  // Sin una sola fecha legible no sabemos cuánto hace que terminaron. Callarse
+  // es lo único honesto.
+  if (!Number.isFinite(ultimoToque)) return false
+  return ahoraMs - ultimoToque > GRACIA_CIERRE_MS
+}
+
 /**
  * En qué punto está la revisión de este proyecto.
  *
@@ -107,6 +228,12 @@ export type EstadoDeRevision =
   | { fase: 'en-cola' }
   /** Corriendo ahora mismo. */
   | { fase: 'corriendo'; run: RunView }
+  /**
+   * La base todavía dice "corriendo", pero dejamos de saber de ella: el
+   * trabajo que la sostenía dejó de latir. A diferencia de `fallada`, acá el
+   * motor no avisó nada — por eso no hay `motivo` que mostrar.
+   */
+  | { fase: 'abandonada'; run: RunView }
   /** Se cortó o ni arrancó. `motivo` es lo que dijo el motor, tal cual. */
   | { fase: 'fallada'; motivo: string | null }
   /** Terminó. Recién acá tiene sentido hablar de lo que se encontró. */
@@ -115,6 +242,7 @@ export type EstadoDeRevision =
 export function estadoDeRevision(
   run: RunView | null,
   trabajos: readonly JobView[] = [],
+  ahoraMs: number = Date.now(),
 ): EstadoDeRevision {
   // Más reciente primero. El último trabajo manda: un reintento pisa al fallo
   // anterior, no al revés.
@@ -123,7 +251,11 @@ export function estadoDeRevision(
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
 
   if (run) {
-    if (estaCorriendo(run)) return { fase: 'corriendo', run }
+    if (estaCorriendo(run)) {
+      return corridaAbandonada(run, trabajos, ahoraMs)
+        ? { fase: 'abandonada', run }
+        : { fase: 'corriendo', run }
+    }
     if (seCorto(run)) return { fase: 'fallada', motivo: motivoDelCorte(run, propios) }
     // Terminada (`succeeded` o `partial`). Si después falló un trabajo suelto
     // —el video de un hallazgo, por ejemplo— la revisión sigue siendo válida y

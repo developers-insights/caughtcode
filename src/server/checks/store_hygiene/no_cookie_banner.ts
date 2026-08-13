@@ -20,7 +20,7 @@ export const noCookieBanner = defineCheck({
   id: 'sto.no_cookie_banner',
   pillar: 'store_hygiene',
   name: 'no-cookie-banner',
-  requires: ['deployed_app'],
+  requires: ['deployed_app', 'browser_run'],
   async run(ctx): Promise<FindingDraft[]> {
     const paginas = ctx.agent?.pages ?? []
     const pedidos = ctx.agent?.network ?? []

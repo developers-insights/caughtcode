@@ -16,10 +16,12 @@ interface Operation {
   table: string
   type: 'insert' | 'update' | 'select'
   payload?: any
-  filters: Array<{ column: string; value: any; op: 'eq' | 'in' }>
+  filters: Array<{ column: string; value: any; op: 'eq' | 'in' | 'lt' | 'gte' }>
   single?: boolean
   maybeSingle?: boolean
   limit?: number
+  /** Qué pidió el llamador en `.order(...)`. Se aplica y además se puede aseverar. */
+  order?: { column: string; ascending: boolean }
 }
 
 export interface RpcCall {
@@ -36,7 +38,8 @@ class FakeQuery implements PromiseLike<any> {
   select(): this {
     return this
   }
-  order(): this {
+  order(column?: string, options?: { ascending?: boolean }): this {
+    if (column) this.op.order = { column, ascending: options?.ascending !== false }
     return this
   }
   eq(column: string, value: any): this {
@@ -45,6 +48,14 @@ class FakeQuery implements PromiseLike<any> {
   }
   in(column: string, value: any[]): this {
     this.op.filters.push({ column, value, op: 'in' })
+    return this
+  }
+  lt(column: string, value: any): this {
+    this.op.filters.push({ column, value, op: 'lt' })
+    return this
+  }
+  gte(column: string, value: any): this {
+    this.op.filters.push({ column, value, op: 'gte' })
     return this
   }
   limit(count: number): this {
@@ -123,9 +134,14 @@ export class FakeDb implements JobsDb {
     const rows = this.tables.get(op.table)!
 
     const matches = (row: FakeRow) =>
-      op.filters.every(({ column, value, op: kind }) =>
-        kind === 'in' ? (value as any[]).includes(row[column]) : row[column] === value,
-      )
+      op.filters.every(({ column, value, op: kind }) => {
+        if (kind === 'in') return (value as any[]).includes(row[column])
+        // Comparación de textos ISO, que es como viajan las fechas por PostgREST
+        // y como se ordenan igual que cronológicamente.
+        if (kind === 'lt') return String(row[column]) < String(value)
+        if (kind === 'gte') return String(row[column]) >= String(value)
+        return row[column] === value
+      })
 
     if (op.type === 'insert') {
       const incoming = Array.isArray(op.payload) ? op.payload : [op.payload]
@@ -145,6 +161,14 @@ export class FakeDb implements JobsDb {
     }
 
     let found = rows.filter(matches)
+    if (op.order) {
+      const { column, ascending } = op.order
+      found = [...found].sort((a, b) => {
+        const izq = String(a[column] ?? '')
+        const der = String(b[column] ?? '')
+        return (izq < der ? -1 : izq > der ? 1 : 0) * (ascending ? 1 : -1)
+      })
+    }
     if (op.limit !== undefined) found = found.slice(0, op.limit)
     if (op.single) return { data: found[0] ?? null, error: found[0] ? null : { message: 'sin filas' } }
     if (op.maybeSingle) return { data: found[0] ?? null, error: null }

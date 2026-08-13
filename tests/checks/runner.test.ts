@@ -408,8 +408,16 @@ describe('el usuario se entera de qué no se revisó', () => {
         code: true,
         database: false,
         deployed_app: false,
+        browser_run: false,
       })
 
+      /**
+       * Con la dirección y una sonda HTTP alcanza para `deployed_app`, pero NO
+       * para `browser_run`: nadie recorrió la app todavía. Es la distinción que
+       * evita que los chequeos de cookies, rastreadores, pantalla en el celular
+       * y flujos faltantes se muestren como "revisados, todo bien" cuando el
+       * agente de navegación nunca llegó a correr.
+       */
       expect(
         detectarInsumos(
           contextoDe(repo, {
@@ -418,7 +426,17 @@ describe('el usuario se entera de qué no se revisó', () => {
             http: async () => null,
           }),
         ),
-      ).toEqual({ code: true, database: true, deployed_app: true })
+      ).toEqual({ code: true, database: true, deployed_app: true, browser_run: false })
+
+      // Con lo que vio el agente sí: ahí hay una visita de verdad detrás.
+      expect(
+        detectarInsumos(
+          contextoDe(repo, {
+            deployedUrl: 'https://miapp.com',
+            agent: { sessions: [] },
+          }),
+        ).browser_run,
+      ).toBe(true)
 
       // Con la dirección pero sin forma de mirarla, no cuenta como disponible.
       expect(

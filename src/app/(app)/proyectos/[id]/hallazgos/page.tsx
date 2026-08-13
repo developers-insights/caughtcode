@@ -45,7 +45,7 @@ export default async function HallazgosPage({ params, searchParams }: Props) {
     )
   }
 
-  const { proyecto, run, findings, videos, trabajos } = resultado.datos
+  const { proyecto, run, findings, videos, trabajos, ahoraServidorMs } = resultado.datos
   const sinResolver = contarSinResolver(findings)
   const peor = peorGravedad(findings)
   const hayUrgente = peor === 'critical' || peor === 'high'
@@ -69,6 +69,7 @@ export default async function HallazgosPage({ params, searchParams }: Props) {
         findingsIniciales={findings}
         runInicial={run}
         trabajos={trabajos}
+        ahoraServidorMs={ahoraServidorMs}
         videos={videos}
         live={!MODO_DEMO}
       />

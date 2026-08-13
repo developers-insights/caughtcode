@@ -1,0 +1,129 @@
+# ============================================================================
+# caughtcode · Blueprint de Render para el worker dedicado
+# ----------------------------------------------------------------------------
+# Reemplaza (en la práctica) al cron de Vercel para todo el trabajo pesado:
+# traer repos, indexarlos, correr los ~40 chequeos, manejar el agente de
+# Playwright y renderizar video. El cron de Vercel (`/api/worker/tick`) queda
+# prendido nada más como red de seguridad — ver docs/DEPLOY-WORKER.md.
+#
+# Sintaxis verificada contra la documentación oficial de Render
+# (render.com/docs/blueprint-spec) al escribir esto.
+# ============================================================================
+
+services:
+  - type: worker
+    name: caughtcode-worker
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+
+    # ── Plan: Pro (4 GB RAM / 2 CPU) ────────────────────────────────────────
+    # Justificación por memoria real, no por default:
+    #   · Worker en reposo (Node + módulos ya cargados): ~250 MB medido.
+    #   · WORKER_CONCURRENCY por defecto en scripts/worker.ts es 2 → hasta DOS
+    #     trabajos corriendo en simultáneo en el mismo proceso.
+    #   · Cada trabajo de tipo "agent" abre un contexto de Chromium: ~300-500 MB
+    #     cada uno. Peor caso con concurrencia 2: hasta ~1000 MB solo en
+    #     navegadores.
+    #   · El índice del repo (tree-sitter + AST) se arma completo en memoria
+    #     por corrida; en repos grandes no es despreciable.
+    #   · `ffmpeg-static` corre como subproceso del renderer de video: suma al
+    #     mismo cgroup aunque no sea heap de Node.
+    #   Total estimado en el peor caso: ~250 + ~1000 (2x Chromium) + índice +
+    #   ffmpeg ⇒ cerca o por encima de los 2 GB de "Standard", con poco margen
+    #   para picos de GC o un repo grande. "Pro" (4 GB / 2 CPU) da margen real
+    #   (~2x el peor caso estimado) y un CPU por trabajo concurrente, que
+    #   importa: con concurrencia 2 en 1 solo CPU (plan Standard), Chromium y
+    #   ffmpeg compiten por el mismo core y el trabajo se hace más lento, no
+    #   solo más ajustado de memoria.
+    #   Si el costo de Pro no cierra: bajar `WORKER_CONCURRENCY=1` (variable no
+    #   declarada acá, se agrega a mano si se decide) y usar "standard" en vez
+    #   de "pro" — decisión abierta para el dueño del producto, ver reporte.
+    plan: pro
+
+    # Disco NO declarado a propósito: `CAUGHTCODE_STORAGE_DIR` apunta a un
+    # directorio del filesystem efímero del contenedor, no a un disco
+    # persistente de Render. El filesystem efímero SÍ persiste mientras el
+    # proceso vive (solo se pierde en redeploy/restart) — que es exactamente
+    # lo que hace falta para encadenar jobs de una misma corrida
+    # (ingest → index → checks → agent → video, todos bajo
+    # <storageDir>/<projectId>/<runId>/). Un disco persistente de Render
+    # sobreviviría además a los redeploys, y eso es justo lo que NO se
+    # necesita: nada tiene que sobrevivir un redeploy, así que pagar por un
+    # disco persistente acá sería costo sin beneficio.
+    #
+    # ⚠️ Esto NO significa que el código de cada corrida se borre solo al
+    # terminar. Verificado por lectura de código: `deleteRunCode`/`purgeExpired`
+    # (`src/server/ingest/retention.ts`) existen pero no los llama nadie desde
+    # el camino de trabajos (`src/server/jobs/**`), y `withWorkspace`/
+    # `removeWorkspace` (`src/server/ingest/workspace.ts`) solo se usan hoy
+    # desde el onboarding (`src/app/(app)/proyectos/nuevo/actions.ts`), no
+    # desde el fin de una corrida. En Vercel esto no se notaba porque `/tmp`
+    # moría solo con cada invocación; en este worker, que vive días, el código
+    # de todas las corridas se va acumulando en el mismo filesystem hasta el
+    # próximo redeploy o restart del servicio — no hay tope ni limpieza
+    # automática todavía. Ver docs/DEPLOY-WORKER.md, sección "Almacenamiento y
+    # borrado del código", para el estado actual y cómo vigilarlo.
+
+    autoDeployTrigger: commit
+
+    envVars:
+      # ── Supabase ───────────────────────────────────────────────────────
+      - key: NEXT_PUBLIC_SUPABASE_URL
+        sync: false
+      - key: NEXT_PUBLIC_SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+
+      # ── Cifrado de credenciales guardadas (tokens de GitHub, etc.) ──────
+      - key: ENCRYPTION_KEY
+        sync: false
+
+      # ── Anthropic (el agente y los chequeos que usan LLM) ───────────────
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: ANTHROPIC_MODEL
+        sync: false
+
+      # ── Almacenamiento del workspace de cada corrida (ver nota de disco
+      #    más arriba: NO es un Render Disk, es una ruta del filesystem
+      #    efímero del contenedor) ───────────────────────────────────────
+      - key: CAUGHTCODE_STORAGE_DIR
+        sync: false
+
+      # ── Secreto compartido entre el cron de Vercel y el worker (por si
+      #    /api/worker/tick necesita distinguir llamadas legítimas) ───────
+      - key: WORKER_SECRET
+        sync: false
+
+      # ── GitHub App (clonar repos privados, leer metadata) ───────────────
+      - key: GITHUB_APP_ID
+        sync: false
+      - key: GITHUB_APP_SLUG
+        sync: false
+      - key: GITHUB_APP_CLIENT_ID
+        sync: false
+      - key: GITHUB_APP_CLIENT_SECRET
+        sync: false
+      - key: GITHUB_APP_PRIVATE_KEY
+        sync: false
+
+      # ── Texto a voz para la narración de los videos ─────────────────────
+      - key: TTS_PROVIDER
+        sync: false
+      - key: AZURE_SPEECH_KEY
+        sync: false
+      - key: AZURE_SPEECH_REGION
+        sync: false
+      - key: AZURE_SPEECH_VOICE
+        sync: false
+
+      # ── Renderer de video ────────────────────────────────────────────────
+      - key: VIDEO_RENDERER
+        sync: false
+
+      # ── URL pública de la app (queda en Vercel; el worker la usa para
+      #    armar links en videos/reportes, no para servir nada) ───────────
+      - key: NEXT_PUBLIC_APP_URL
+        sync: false

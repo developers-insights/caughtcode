@@ -97,8 +97,8 @@ export interface CheckDefinition {
   pillar: Pillar
   /** Nombre corto interno. No se muestra al usuario. */
   name: string
-  /** Requiere código, base de datos, app desplegada, o varias. */
-  requires: Array<'code' | 'database' | 'deployed_app'>
+  /** Requiere código, base de datos, app desplegada, la visita del agente, o varias. */
+  requires: Array<'code' | 'database' | 'deployed_app' | 'browser_run'>
   run: (ctx: CheckContext) => Promise<FindingDraft[]>
 }
 

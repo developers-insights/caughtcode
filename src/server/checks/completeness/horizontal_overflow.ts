@@ -23,7 +23,7 @@ export const horizontalOverflow = defineCheck({
   id: 'cmp.horizontal_overflow',
   pillar: 'completeness',
   name: 'horizontal-overflow',
-  requires: ['deployed_app'],
+  requires: ['deployed_app', 'browser_run'],
   async run(ctx): Promise<FindingDraft[]> {
     const mediciones = ctx.agent?.overflow ?? []
     const drafts: FindingDraft[] = []

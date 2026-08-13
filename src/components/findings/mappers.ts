@@ -45,13 +45,16 @@ export function aRun(row: AnalysisRunRow): RunView {
  * está la revisión. El resto de la fila (payload, intentos, arriendo) es
  * asunto del motor.
  */
-export function aJob(row: Pick<JobRow, 'id' | 'kind' | 'status' | 'last_error' | 'created_at'>): JobView {
+export function aJob(
+  row: Pick<JobRow, 'id' | 'kind' | 'status' | 'last_error' | 'created_at' | 'updated_at'>,
+): JobView {
   return {
     id: row.id,
     kind: row.kind,
     status: row.status,
     lastError: row.last_error,
     createdAt: row.created_at,
+    updatedAt: row.updated_at,
   }
 }
 

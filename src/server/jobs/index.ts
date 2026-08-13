@@ -39,8 +39,10 @@ export { setJobsDb, type JobsDb } from './db'
 export {
   DEFAULT_LEASE_SECONDS,
   DEFAULT_MAX_ATTEMPTS,
+  adelantarOEncolar,
   cancel,
   claim,
+  encolarUnaVezPorCorrida,
   enqueue,
   enqueueMany,
   fail,
@@ -52,10 +54,12 @@ export {
   savePayload,
   succeed,
   toJobRecord,
+  type EnqueueDeCorridaInput,
   type EnqueueInput,
   type FailOptions,
   type FailOutcome,
   type ListJobsFilter,
+  type ResultadoAdelanto,
 } from './queue'
 
 export {
@@ -101,10 +105,20 @@ export {
 export {
   ETAPA_TERMINADA,
   TRABAJOS_DE_REVISION,
+  barrerCorridasHuerfanas,
   esTrabajoDeRevision,
   reconcileRunStatus,
+  type ResultadoBarrida,
   type ResultadoReconciliacion,
 } from './reconcile'
+
+export {
+  ESPERA_MAXIMA_EN_COLA_MS,
+  motivoDesatendido,
+  vencerEncoladosDesatendidos,
+  type OpcionesVencimiento,
+  type ResultadoVencimiento,
+} from './encolados'
 
 export {
   HEARTBEAT_MS,

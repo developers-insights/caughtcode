@@ -163,11 +163,7 @@ describe('handler de ingest_repo', () => {
       db: async () => db,
       almacen,
       store: almacenEnMemoria().store,
-      descifrar: async () => 'postgres://solo-lectura',
     })
-    db.sembrar(T.projectConnections, [
-      { id: 'c1', project_id: 'proyecto-1', provider: 'supabase', credentials_ref: 'cifrado' },
-    ])
 
     await handler({}, contextoDeTrabajo({ analysisRunId: null }))
 
@@ -177,7 +173,6 @@ describe('handler de ingest_repo', () => {
     expect(siguiente.payload).toEqual({
       repoPath: expect.any(String),
       deployedUrl: 'https://mi-app.vercel.app',
-      databaseUrl: 'postgres://solo-lectura',
     })
 
     // El siguiente trabajo va a leer de ahí: si no existe, la cadena se corta.
@@ -185,26 +180,34 @@ describe('handler de ingest_repo', () => {
     expect((await stat(marcador)).isFile()).toBe(true)
   })
 
-  it('si no se puede leer la conexión a la base, el análisis sigue igual y queda dicho', async () => {
+  /**
+   * Regresión de seguridad. Este handler descifraba la conexión de solo lectura
+   * a la base del cliente y la metía **en claro** en el payload del trabajo
+   * siguiente. `jobs_caughtcode` se lee con la policy de la organización: el
+   * miembro con el rol más bajo se llevaba la cadena de conexión con un `GET`, y
+   * el cifrado en reposo de `project_connections_caughtcode` quedaba anulado por
+   * la copia legible de al lado.
+   *
+   * Ahora en el payload viaja el `projectId` —que ya viajaba— y cada trabajo que
+   * necesita la conexión la resuelve solo.
+   */
+  it('la conexión a la base del cliente no viaja en el payload, ni siquiera existiendo', async () => {
     const db = baseLista()
     setJobsDb(db)
     db.sembrar(T.projectConnections, [
-      { id: 'c1', project_id: 'proyecto-1', provider: 'supabase', credentials_ref: 'roto' },
+      { id: 'c1', project_id: 'proyecto-1', provider: 'supabase', credentials_ref: 'cifrado' },
     ])
-    const ctx = contextoDeTrabajo({ analysisRunId: null })
 
     const handler = crearHandlerIngestRepo({
       db: async () => db,
       almacen: almacenFalso({ [RUTA_SUBIDA]: zipLimpio() }),
       store: almacenEnMemoria().store,
-      descifrar: async () => {
-        throw new Error('clave equivocada')
-      },
     })
-    await handler({}, ctx)
+    await handler({}, contextoDeTrabajo({ analysisRunId: null }))
 
-    expect(encolados(db)[0].payload.databaseUrl).toBeNull()
-    expect(ctx.registro.join(' ')).toMatch(/conexión a tu base/i)
+    const escrito = JSON.stringify(encolados(db)[0].payload)
+    expect(encolados(db)[0].payload).not.toHaveProperty('databaseUrl')
+    expect(escrito).not.toMatch(/postgres|cifrado|credentials/i)
   })
 
   it('guarda el código de la corrida en su propia ruta y actualiza el proyecto', async () => {
@@ -222,6 +225,58 @@ describe('handler de ingest_repo', () => {
     const proyecto = (db.filasDe(T.projects) as Array<Record<string, any>>)[0]
     expect(proyecto.storage_path).toBe(esperada)
     expect(proyecto.stack_detected.framework).toBe('nextjs')
+  })
+
+  /**
+   * `storage_path` es una columna que cualquier miembro de la organización puede
+   * escribir por PostgREST, y el descargador corre con `service_role`, que
+   * ignora las políticas del bucket. Apuntándola al .zip de otra empresa, este
+   * handler se lo bajaba y lo analizaba como si fuera propio.
+   *
+   * Acá **sí** hay a dónde caer, así que la copia ajena se saca del plan y la
+   * auditoría sigue por el repositorio: fallar cerrado sin dejar sin servicio a
+   * un cliente con una ruta histórica rara.
+   */
+  it('una copia guardada que no es del proyecto se deja afuera y se sigue por el repositorio', async () => {
+    const db = baseLista({
+      source_type: 'github_public',
+      storage_path: 'org-2/proyecto-9/codigo.zip',
+      repo_url: 'https://github.com/mi/app',
+    })
+    setJobsDb(db)
+    setGithubFetch((async () =>
+      new Response(zipLimpio() as unknown as BodyInit, { status: 200 })) as unknown as typeof fetch)
+
+    const almacen = almacenFalso({ 'org-2/proyecto-9/codigo.zip': zipLimpio() })
+    const ctx = contextoDeTrabajo({ analysisRunId: null })
+    const handler = crearHandlerIngestRepo({
+      db: async () => db,
+      almacen,
+      store: almacenEnMemoria().store,
+    })
+    await handler({}, ctx)
+
+    expect(almacen.descargas, 'bajó el .zip de otra organización').toEqual([])
+    expect(encolados(db)).toHaveLength(1)
+    expect(ctx.registro.join(' ')).toMatch(/Dejamos afuera una copia guardada/)
+  })
+
+  it('si la copia ajena era el único origen, no baja nada y explica cómo destrabarlo', async () => {
+    const db = baseLista({ storage_path: 'org-2/proyecto-9/codigo.zip', repo_url: null })
+    setJobsDb(db)
+    const almacen = almacenFalso({ 'org-2/proyecto-9/codigo.zip': zipLimpio() })
+
+    const handler = crearHandlerIngestRepo({
+      db: async () => db,
+      almacen,
+      store: almacenEnMemoria().store,
+    })
+
+    await expect(handler({}, contextoDeTrabajo({ analysisRunId: null }))).rejects.toThrow(
+      /no encontramos el código/i,
+    )
+    expect(almacen.descargas).toEqual([])
+    expect(encolados(db)).toHaveLength(0)
   })
 
   it('trae un repositorio público sin ninguna credencial', async () => {

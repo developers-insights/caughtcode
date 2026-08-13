@@ -40,14 +40,18 @@
  *
  * ## Encadenado
  *
- * Al terminar, encola `run_checks` siempre, y `run_browser_agent` si el
- * proyecto tiene una URL publicada — son independientes entre sí, no hace
- * falta esperar a que uno termine para arrancar el otro.
+ * Al terminar encola `run_checks` siempre. Si el proyecto tiene una URL
+ * publicada, encola además `run_browser_agent` para ya y **difiere** la revisión
+ * unos minutos: el agente la adelanta cuando termina, con la evidencia adentro,
+ * y si el agente nunca corre la revisión se dispara sola. Ver
+ * `encolarSiguientes()` acá abajo, que es donde está el razonamiento completo.
  */
 
 import { buildCodeIndex, type BuildIndexOptions } from './index'
 import type { CodeIndex, StackInfo } from '@/lib/types/domain'
-import { enqueue, registerHandler, runStages } from '@/server/jobs'
+import { leerConexionBase } from '@/server/ingest/conexion'
+import { asegurarCodigoEnDisco } from '@/server/ingest/rehidratar'
+import { encolarUnaVezPorCorrida, registerHandler, runStages } from '@/server/jobs'
 import type { JobContext, JobHandler, StageStore } from '@/server/jobs'
 import { describeDbError, jobsDb, type JobsDb } from '@/server/jobs/db'
 import { JobError } from '@/server/jobs/errors'
@@ -60,7 +64,12 @@ export interface IndexCodePayload {
   repoPath: string
   /** Dirección de la app publicada, si el usuario la dio. Viaja al siguiente job. */
   deployedUrl?: string | null
-  /** Conexión de solo lectura a la base del usuario, si la conectó. */
+  /**
+   * @deprecated Solo para los trabajos que quedaron encolados con el secreto
+   * adentro. La conexión ya no viaja en el payload —cualquier miembro de la
+   * organización puede leer `jobs.payload`—: se resuelve acá con
+   * `leerConexionBase()`. Ver `@/server/ingest/conexion`.
+   */
   databaseUrl?: string | null
 }
 
@@ -71,6 +80,10 @@ export interface DependenciasIndexCode {
   build?: (options: BuildIndexOptions) => ReturnType<typeof buildCodeIndex>
   /** Solo para tests: reemplaza el almacén de etapas que vive en `jobs.payload`. */
   store?: StageStore
+  /** Cómo se garantiza que el código esté en disco. Se inyecta en los tests. */
+  asegurar?: typeof asegurarCodigoEnDisco
+  /** Cómo se resuelve la conexión a la base del usuario. Se inyecta en los tests. */
+  conexion?: typeof leerConexionBase
 }
 
 const ETAPAS = {
@@ -101,6 +114,7 @@ export function crearHandlerIndexCode(
   return async (payload, ctx) => {
     const abrirDb = deps.db ?? jobsDb
     const build = deps.build ?? buildCodeIndex
+    const asegurar = deps.asegurar ?? asegurarCodigoEnDisco
     const analysisRunId = exigirCorrida(ctx)
 
     await runStages(
@@ -111,13 +125,27 @@ export function crearHandlerIndexCode(
         label: ETAPAS.analizar,
         progress: 80,
         run: async (helper): Promise<ReciboDelIndice> => {
+          const root = await asegurarRoot(asegurar, payload, ctx, analysisRunId)
+
+          // El secreto se resuelve acá y muere con el trabajo. `payload` solo se
+          // mira por los trabajos que quedaron encolados antes del cambio.
+          const databaseUrl =
+            payload.databaseUrl ??
+            (await (deps.conexion ?? leerConexionBase)({
+              db: await abrirDb(),
+              projectId: ctx.projectId,
+              log: ctx.log,
+            }))
+
           const resultado = await build({
-            root: payload.repoPath,
-            databaseUrl: payload.databaseUrl ?? null,
+            root,
+            databaseUrl,
             onProgress: async (_stage, pct) => {
               await helper.heartbeat(Math.round(pct * 0.8))
             },
           })
+
+          exigirIndiceConArchivos(resultado.index)
 
           // El índice se escribe acá mismo, no se devuelve: devolverlo revienta
           // el tope de `runStages` en cualquier repo real.
@@ -149,7 +177,7 @@ export function crearHandlerIndexCode(
             })
           }
 
-          await encolarSiguientes(ctx, payload)
+          await encolarSiguientes(ctx, payload, analysisRunId)
 
           return { archivos: recibo.archivos, rutas: recibo.rutas, recortado: recibo.recortado }
         },
@@ -168,6 +196,70 @@ function exigirCorrida(ctx: JobContext): string {
     })
   }
   return ctx.analysisRunId
+}
+
+/* ── Que el código esté de verdad ─────────────────────────────────────── */
+
+/**
+ * La carpeta que dejó `ingest_repo` puede no existir: este trabajo corre en otra
+ * invocación y en producción el disco es efímero. Antes de leer nada, se
+ * garantiza que el código esté (ver `@/server/ingest/rehidratar`).
+ */
+async function asegurarRoot(
+  asegurar: typeof asegurarCodigoEnDisco,
+  payload: IndexCodePayload,
+  ctx: JobContext,
+  analysisRunId: string,
+): Promise<string> {
+  // Sin proyecto no hay dónde buscar la copia guardada. No se corta acá: si de
+  // verdad no hay código, el control de más abajo lo dice con todas las letras.
+  if (!ctx.projectId) return payload.repoPath
+
+  const { codeDir, rehidratado } = await asegurar({
+    projectId: ctx.projectId,
+    analysisRunId,
+    repoPath: payload.repoPath,
+    log: ctx.log,
+  })
+
+  if (rehidratado) ctx.log('Tu código ya está de nuevo acá: seguimos con el análisis.')
+  return codeDir
+}
+
+/**
+ * Un índice sin un solo archivo no se guarda ni encadena nada.
+ *
+ * Es el corazón del arreglo. Antes, con la carpeta vacía, `walkFiles()` devolvía
+ * cero archivos sin fallar, el índice se escribía igual, `run_checks` no
+ * encontraba nada y la corrida terminaba "exitosa" con un informe en blanco. Un
+ * producto que promete encontrar problemas no puede entregar eso como si fuera
+ * un resultado.
+ *
+ * **Sin reintento, y esto antes estaba mal.** El comentario viejo justificaba
+ * reintentar diciendo que llegar acá casi siempre significaba que la copia de
+ * Storage no se había podido bajar. Eso no puede pasar: si la copia no se baja,
+ * `asegurarCodigoEnDisco` tira antes (`descarga_fallida`, `sin_copia_guardada`)
+ * y nunca se llega hasta acá. La única forma de tener `fileCount === 0` con el
+ * código en disco es que el árbol esté de verdad vacío o que los filtros se lo
+ * hayan llevado entero —alguien subió un .zip con la carpeta compilada y poco
+ * más—, y eso no lo arregla ningún reintento. Reintentar quemaba tres intentos
+ * con backoff y le dejaba al usuario un "es algo momentáneo" sobre una corrida
+ * definitivamente muerta.
+ *
+ * **Un repo sin nada de código NO cae acá.** `fileCount` cuenta todos los
+ * archivos que sobrevivieron a los filtros, no solo los `.ts`/`.tsx`: un
+ * proyecto de puro HTML, o de configuración, da `fileCount > 0` y el motor deja
+ * la nota "No encontramos archivos de código para leer". Eso es un resultado
+ * legítimo y sigue de largo.
+ */
+function exigirIndiceConArchivos(index: CodeIndex): void {
+  if (index.fileCount > 0) return
+  throw new JobError(
+    'No encontramos ni un archivo para revisar en tu proyecto. Suele pasar cuando lo ' +
+      'que llega es solo la carpeta ya compilada (dist, build) y no el código fuente. ' +
+      'Revisá que esté el código y volvé a lanzar la revisión.',
+    { retryable: false, code: 'indice_vacio' },
+  )
 }
 
 /* ── Guardado ─────────────────────────────────────────────────────────── */
@@ -232,55 +324,115 @@ async function guardarStack(db: JobsDb, projectId: string, stack: StackInfo): Pr
 /* ── Encadenado ───────────────────────────────────────────────────────── */
 
 /**
- * Encadena el paso siguiente. **En serie cuando hay app publicada**, no en paralelo.
+ * Cuánto espera la revisión de red antes de arrancar sin el agente.
  *
- * Antes esto encolaba `run_checks` y `run_browser_agent` a la vez, con el
- * argumento de que son independientes. No lo son: los chequeos de cookies, de
- * rastreadores, de flujos que faltan y de pantalla en el celular leen lo que vio
- * el agente. Corriendo a la par, la revisión ganaba la carrera, no encontraba
- * nada de eso, y se salteaba justo los chequeos que el producto promete — sin
- * que nadie se enterara, porque un chequeo salteado no falla: no aparece.
+ * El número sale de los tiempos reales del sistema, no de un redondeo lindo:
  *
- * Entonces:
- *   - con app publicada: `run_browser_agent`, y **él** encola `run_checks` con la
- *     evidencia adentro (ver `src/server/agent/handlers.ts`);
- *   - sin app publicada: `run_checks` directo, que es todo lo que se puede hacer.
+ * - **Piso: lo que puede tardar el agente.** `runAgentSession` corre hasta 10
+ *   tareas (`TASK_ORDER`) con `taskTimeoutMs = 90_000` cada una: 15 minutos en
+ *   el peor caso imaginable, más el arranque del navegador, la pasada de
+ *   celular y la subida de la evidencia. Un diferimiento por debajo de eso haría
+ *   que la red se dispare encima de un agente lento pero sano, y ahí la revisión
+ *   correría sin evidencia teniéndola a un minuto de distancia.
+ * - **Techo: los 30 minutos de `ESPERA_MAXIMA_EN_COLA_MS`.** Pasado ese umbral,
+ *   `vencerEncoladosDesatendidos()` da por perdido lo que nadie atiende. La red
+ *   tiene que haber corrido antes: si no, se vencen las dos cosas y la corrida
+ *   cierra sin un solo hallazgo, que es exactamente lo que esto viene a evitar.
+ * - **El cron dispara cada 60 s** y el tick toma un trabajo por vez, así que la
+ *   red no arranca en el minuto 20 exacto sino en el primer tick que la
+ *   encuentre vencida. Los 10 minutos de margen contra el techo absorben eso.
  *
- * El costo de serializar es que la revisión arranca unos minutos más tarde. Lo
- * paga el handler del agente, que encola la revisión **aunque la prueba falle**:
- * si el navegador no abre, el usuario recibe igual la revisión de su código.
+ * 20 minutos: cinco por encima del peor agente posible, diez por debajo del
+ * abandono. En el camino normal —el agente termina y adelanta la red— este
+ * número no se nota: la revisión arranca apenas termina la prueba.
  */
-async function encolarSiguientes(ctx: JobContext, payload: IndexCodePayload): Promise<void> {
+export const DIFERIMIENTO_RED_MS = 20 * 60_000
+
+/**
+ * Encadena el paso siguiente.
+ *
+ * ## Con app publicada: el agente primero, pero con red
+ *
+ * Los chequeos de cookies, de rastreadores, de flujos que faltan y de pantalla
+ * en el celular leen lo que vio el agente. Cuando esto encolaba las dos cosas en
+ * paralelo, la revisión ganaba la carrera y se salteaba justo los chequeos que el
+ * producto promete — en silencio, porque un chequeo salteado no falla: no
+ * aparece. Serializar lo arregló y sigue siendo lo correcto.
+ *
+ * Lo que no estaba contemplado es que el agente **nunca llegue a correr**. Hoy
+ * eso es lo normal, no la excepción: el tick de Vercel no pide
+ * `run_browser_agent` (no hay navegador en la función serverless, ver
+ * `KINDS_EN_SERVERLESS`) y el worker de Render puede no existir todavía, estar
+ * reiniciando o haberse caído. Con la cadena estrictamente serial, nadie
+ * encolaba la revisión y el usuario recibía una auditoría vacía —con un motivo
+ * legible, pero sin una sola línea de su código revisada—. Es el mismo bug de
+ * siempre entrando por otra puerta.
+ *
+ * Entonces se encolan **las dos**:
+ *
+ *   - `run_browser_agent` para ya;
+ *   - `run_checks` con `run_after` a `DIFERIMIENTO_RED_MS`, de red.
+ *
+ * Cuando el agente termina —bien o mal— no encola una revisión nueva: adelanta
+ * la que ya está esperando y le mete la evidencia adentro
+ * (`adelantarOEncolar()`, ver `src/server/agent/handlers.ts`). Si el agente
+ * nunca corre, la red se dispara sola y la revisión sale sin evidencia del
+ * navegador, con esos chequeos marcados como no revisados.
+ *
+ * ## Sin app publicada
+ *
+ * `run_checks` directo, que es todo lo que se puede hacer.
+ */
+async function encolarSiguientes(
+  ctx: JobContext,
+  payload: IndexCodePayload,
+  analysisRunId: string,
+): Promise<void> {
   if (!ctx.projectId) return
 
+  // `encolarUnaVezPorCorrida` y no `enqueue`: esta etapa puede correr dos veces
+  // (el worker se murió después de encolar y antes de guardar el avance), y dos
+  // `run_checks` de la misma corrida son dos revisiones peleándose las mismas
+  // filas de `findings`.
   const comun = {
     orgId: ctx.orgId,
     projectId: ctx.projectId,
-    analysisRunId: ctx.analysisRunId,
+    analysisRunId,
   }
 
+  // La conexión a la base **no** se reenvía, ni siquiera cuando este trabajo la
+  // resolvió: escribirla en el payload la deja legible para cualquier miembro de
+  // la organización. Cada consumidor la vuelve a resolver por su cuenta.
   if (payload.deployedUrl) {
-    await enqueue({
+    await encolarUnaVezPorCorrida({
       ...comun,
       kind: 'run_browser_agent',
-      // `repoPath` y `databaseUrl` viajan porque el trabajo siguiente los necesita:
-      // el agente no los usa, se los pasa a `run_checks` cuando lo encola.
+      // `repoPath` viaja porque el trabajo siguiente lo necesita: el agente no
+      // lo usa, se lo pasa a `run_checks` cuando la adelanta.
       payload: {
         deployedUrl: payload.deployedUrl,
         repoPath: payload.repoPath,
-        databaseUrl: payload.databaseUrl ?? null,
       },
+    })
+
+    await encolarUnaVezPorCorrida({
+      ...comun,
+      kind: 'run_checks',
+      payload: {
+        repoPath: payload.repoPath,
+        deployedUrl: payload.deployedUrl,
+      },
+      runAfter: new Date(Date.now() + DIFERIMIENTO_RED_MS),
     })
     return
   }
 
-  await enqueue({
+  await encolarUnaVezPorCorrida({
     ...comun,
     kind: 'run_checks',
     payload: {
       repoPath: payload.repoPath,
       deployedUrl: null,
-      databaseUrl: payload.databaseUrl ?? null,
     },
   })
 }

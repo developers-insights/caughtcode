@@ -43,6 +43,19 @@ export interface DatosDeHallazgos {
    * no comprobamos.
    */
   trabajos: JobView[]
+  /**
+   * Qué hora era, para el servidor, cuando se leyeron esos trabajos.
+   *
+   * Existe porque decidir si una corrida dejó de latir es restarle a "ahora" el
+   * `updated_at` del trabajo, y ese `updated_at` lo escribe Postgres. Si el
+   * "ahora" lo pusiera el navegador, una máquina adelantada más que el umbral
+   * daría por muerta una revisión sana — y como esta pantalla se arma en el
+   * servidor y después hidrata, con el reloj cerca del borde el servidor y el
+   * cliente podrían llegar incluso a conclusiones distintas sobre los mismos
+   * datos. Viajando en la carga, la resta se hace siempre contra el mismo reloj
+   * que escribió los timestamps.
+   */
+  ahoraServidorMs: number
 }
 
 /** Alcanza para reconstruir el estado: la cola de un proyecto es corta. */
@@ -79,7 +92,9 @@ export async function cargarHallazgos(
       .maybeSingle(),
     supabase
       .from(T.jobs)
-      .select('id, kind, status, last_error, created_at')
+      // `updated_at` es el latido: sin él no se puede distinguir un trabajo
+      // que sigue vivo de uno cuyo proceso murió sin avisar (ver `view.ts`).
+      .select('id, kind, status, last_error, created_at, updated_at')
       .eq('project_id', projectId)
       .order('created_at', { ascending: false })
       .limit(MAX_TRABAJOS),
@@ -89,6 +104,9 @@ export async function cargarHallazgos(
   if (errorJobs) return { ok: false, motivo: 'error', detalle: errorJobs.message }
 
   const trabajos = (jobRows ?? []).map(aJob)
+  // Apenas leídos los trabajos, para que el "ahora" y los latidos que se van a
+  // comparar contra él sean del mismo instante. Ver `ahoraServidorMs`.
+  const ahoraServidorMs = Date.now()
 
   const run = runRow ? aRun(runRow) : null
   if (!run) {
@@ -100,6 +118,7 @@ export async function cargarHallazgos(
         findings: [],
         videos: {},
         trabajos,
+        ahoraServidorMs,
       },
     }
   }
@@ -122,6 +141,7 @@ export async function cargarHallazgos(
       findings,
       videos: await cargarVideos(supabase, findings),
       trabajos,
+      ahoraServidorMs,
     },
   }
 }
@@ -258,7 +278,11 @@ function demo(estadoCrudo?: string): Resultado {
   if (estado === 'sin-permisos') return { ok: false, motivo: 'sin-permisos' }
   if (estado === 'error') return { ok: false, motivo: 'error', detalle: 'Demostración del estado de error.' }
 
-  const { findings, run, trabajos } = datosDemo(estado)
+  // Mismo reloj para armar los ejemplos y para juzgarlos: los estados que
+  // dependen del tiempo (un latido reciente, uno de hace dos días) tienen que
+  // verse igual sin importar a qué hora se mire la demostración.
+  const ahoraServidorMs = Date.now()
+  const { findings, run, trabajos } = datosDemo(estado, ahoraServidorMs)
 
   return {
     ok: true,
@@ -268,6 +292,7 @@ function demo(estadoCrudo?: string): Resultado {
       findings,
       videos: VIDEOS_DEMO,
       trabajos,
+      ahoraServidorMs,
     },
   }
 }

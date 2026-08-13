@@ -20,7 +20,7 @@ import { Hourglass, RotateCcw, ScanSearch } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button, Callout, Card, CardBody, EmptyState, ErrorState, motionPresets } from '@/components/ui'
 import { startAuditAction } from '@/app/(app)/proyectos/nuevo/actions'
-import { ANTES_DE_REVISAR } from './copy'
+import { ANTES_DE_REVISAR, CORTE } from './copy'
 
 /* ── Arrancar la revisión ──────────────────────────────────────────────── */
 
@@ -217,6 +217,47 @@ export function ReviewFailed({ projectId, motivo, className }: ReviewFailedProps
             )}
           </>
         }
+        action={
+          <BotonRevisar
+            projectId={projectId}
+            icon={<RotateCcw strokeWidth={1.9} />}
+            onError={setFallo}
+          >
+            {ANTES_DE_REVISAR.fallada.accion}
+          </BotonRevisar>
+        }
+      />
+      {fallo && <Callout tone="expuesto">{fallo}</Callout>}
+    </div>
+  )
+}
+
+/* ── Corrida abandonada, sin nada guardado todavía ───────────────────────── */
+
+export interface ReviewStalledProps {
+  projectId: string
+  className?: string
+}
+
+/**
+ * La corrida dice "corriendo" pero dejó de latir, y no llegó a guardar nada
+ * antes de cortarse.
+ *
+ * Se diferencia de `ReviewFailed` en el texto, no en la estructura: acá el
+ * motor no reportó ningún motivo —se quedó callado a mitad de camino—, así
+ * que no hay una caja de "esto fue lo que pasó" para mostrar. Decir que
+ * "falló" sería afirmar algo que tampoco comprobamos; decimos exactamente lo
+ * que sabemos, que es que se cortó.
+ */
+export function ReviewStalled({ projectId, className }: ReviewStalledProps) {
+  const [fallo, setFallo] = useState<string | null>(null)
+
+  return (
+    <div className={cn('space-y-4', className)}>
+      <ErrorState
+        kind="job-failed"
+        title={CORTE.titulo}
+        description={CORTE.texto}
         action={
           <BotonRevisar
             projectId={projectId}

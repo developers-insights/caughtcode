@@ -83,6 +83,24 @@ export const COBERTURA = {
     n === 1 ? 'Deja 1 revisión sin hacer.' : `Deja ${n} revisiones sin hacer.`,
 }
 
+/**
+ * La corrida dice que sigue trabajando, pero dejó de darnos señales de vida.
+ *
+ * Existe por la misma regla dura que `ANTES_DE_REVISAR`: nunca dejar una barra
+ * girando sobre algo que ya no está pasando. Se distingue de "no pudimos
+ * terminar" (`ANTES_DE_REVISAR.fallada`) en que acá el motor no avisó nada —se
+ * quedó callado a mitad de camino—, así que el texto no inventa un motivo que
+ * no tenemos.
+ */
+export const CORTE = {
+  titulo: 'Se cortó la revisión',
+  texto:
+    'Dejamos de tener noticias de tu revisión a mitad de camino. No sabemos bien qué pasó de nuestro lado, pero no va a seguir sola: volvé a lanzarla cuando quieras.',
+  /** Cuando ya había hallazgos guardados antes de que se cortara. */
+  textoConHallazgos:
+    'Se cortó a mitad de camino. Lo que ves abajo ya lo comprobamos y sigue valiendo — para completar el resto, volvé a lanzarla.',
+}
+
 export const PROGRESO = {
   titulo: 'Estamos revisando tu app',
   /** Cuando el motor todavía no reportó en qué anda. */
@@ -229,6 +247,7 @@ export const EVIDENCIA = {
 export const TEXTOS_VISIBLES: string[] = [
   ...Object.values(LISTA).flatMap(aplanar),
   ...Object.values(ANTES_DE_REVISAR).flatMap(aplanar),
+  ...Object.values(CORTE).flatMap(aplanar),
   ...Object.values(COBERTURA).flatMap(aplanar),
   ...Object.values(PROGRESO).flatMap(aplanar),
   ...Object.values(TARJETA).flatMap(aplanar),

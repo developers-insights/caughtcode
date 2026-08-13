@@ -55,7 +55,7 @@ describe('registro de chequeos', () => {
   })
 
   it('cada chequeo declara al menos un insumo y ninguno inventado', () => {
-    const validos = new Set(['code', 'database', 'deployed_app'])
+    const validos = new Set(['code', 'database', 'deployed_app', 'browser_run'])
     for (const check of CHEQUEOS as Check[]) {
       expect(check.requires.length, `${check.id} no declara insumos`).toBeGreaterThan(0)
       for (const insumo of check.requires) {
@@ -68,8 +68,8 @@ describe('registro de chequeos', () => {
 })
 
 describe('filtro de insumos', () => {
-  const soloCodigo = { code: true, database: false, deployed_app: false }
-  const todo = { code: true, database: true, deployed_app: true }
+  const soloCodigo = { code: true, database: false, deployed_app: false, browser_run: false }
+  const todo = { code: true, database: true, deployed_app: true, browser_run: true }
 
   it('con solo el código, los de base quedan afuera y se sabe qué falta', () => {
     const deBase = (CHEQUEOS as Check[]).filter((c) => c.requires.includes('database'))
@@ -89,7 +89,7 @@ describe('filtro de insumos', () => {
   })
 
   it('sin nada, no corre ninguno', () => {
-    const nada = { code: false, database: false, deployed_app: false }
+    const nada = { code: false, database: false, deployed_app: false, browser_run: false }
     for (const check of CHEQUEOS as Check[]) {
       expect(esAplicable(check, nada)).toBe(false)
     }

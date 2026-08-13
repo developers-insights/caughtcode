@@ -199,11 +199,18 @@ export async function correrChequeos(
 
 /* ── Insumos ──────────────────────────────────────────────────────────── */
 
+/**
+ * `deployed_app` se contenta con poder pedirle páginas a la app; `browser_run`
+ * exige que el agente la haya recorrido. Ver el porqué de la separación en
+ * `INSUMO_FALTANTE` (`registry.ts`): con un solo insumo, una corrida sin agente
+ * daba once chequeos "revisados" que nunca habían mirado nada.
+ */
 export function detectarInsumos(ctx: CheckRunContext): InsumosDisponibles {
   return {
     code: Boolean(ctx.repoPath) && ctx.index.fileCount > 0,
     database: ctx.index.dbSchema.source !== 'none',
     deployed_app: Boolean(ctx.deployedUrl) && Boolean(ctx.agent ?? ctx.http),
+    browser_run: Boolean(ctx.deployedUrl) && Boolean(ctx.agent),
   }
 }
 

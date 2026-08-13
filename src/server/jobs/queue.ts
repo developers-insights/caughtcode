@@ -25,10 +25,23 @@
 import type { JobKind, JobRecord, JobStatus } from '@/lib/types/domain'
 import { F, T } from '@/lib/db/tablas'
 import { nextRunAfter, type BackoffOptions } from './backoff'
-import { describeDbError, jobsDb } from './db'
+import { describeDbError, isMissingFunctionError, jobsDb } from './db'
 import { describeError } from './errors'
+import { reconcileRunStatus } from './reconcile'
 
-export const DEFAULT_LEASE_SECONDS = 300
+/**
+ * Cuánto vale un lease sin renovar.
+ *
+ * Era 300 s y eso costaba caro: cuando la instancia se muere (OOM en Vercel), el
+ * trabajo queda inmovilizado los 300 s enteros antes de que `requeueExpired()`
+ * lo rescate. Con `maxAttempts = 3` eso son veinte minutos de spinner antes de
+ * que el usuario vea siquiera un error.
+ *
+ * 90 s es de sobra: el runner late cada 15 s (`HEARTBEAT_MS`), así que el lease
+ * solo tiene que sobrevivir a cinco latidos perdidos seguidos. Si se perdieron
+ * cinco, el worker no está vivo.
+ */
+export const DEFAULT_LEASE_SECONDS = 90
 export const DEFAULT_MAX_ATTEMPTS = 3
 
 /** Columnas de `jobs`, en un solo lugar para no repetir el string. */
@@ -115,6 +128,144 @@ export async function enqueueMany(inputs: EnqueueInput[]): Promise<string[]> {
   const ids: string[] = []
   for (const input of inputs) ids.push(await enqueue(input))
   return ids
+}
+
+/* ── Un trabajo por corrida: encolar sin duplicar ─────────────────────── */
+
+/**
+ * Encolar es una escritura, y la regla del registro vale también acá: **un
+ * handler puede correr dos veces**. Un `index_code` que muere entre el `enqueue`
+ * y el guardado del avance de su etapa vuelve a encolar todo al reintentar, y
+ * dos `run_checks` sobre la misma corrida son dos revisiones compitiendo por las
+ * mismas filas de `findings`.
+ *
+ * La clave natural de estos trabajos es (`analysis_run_id`, `kind`): de cada
+ * tipo hay a lo sumo uno por corrida. (`generate_video` es la excepción —hay
+ * hasta tres— y por eso no usa esto.)
+ */
+export interface EnqueueDeCorridaInput<TPayload = unknown> extends EnqueueInput<TPayload> {
+  /** Obligatorio: es la mitad de la clave natural. */
+  analysisRunId: string
+}
+
+/**
+ * Encola solo si la corrida no tiene ya un trabajo de ese tipo, **en el estado
+ * que sea**. Que exista uno `failed` también frena: reencolarlo por la puerta de
+ * atrás le devolvería intentos a algo que ya se dio por perdido.
+ */
+export async function encolarUnaVezPorCorrida<TPayload = unknown>(
+  input: EnqueueDeCorridaInput<TPayload>,
+): Promise<'encolado' | 'ya_existia'> {
+  const db = await jobsDb()
+  if (await hayTrabajoDeCorrida(db, input.analysisRunId, input.kind)) return 'ya_existia'
+  await enqueue(input)
+  return 'encolado'
+}
+
+/**
+ * - `adelantado`: había uno esperando y ahora corre ya, con este payload.
+ * - `ya_no_esperaba`: existe, pero alguien ya lo tomó (o terminó). No se toca.
+ * - `encolado`: no existía ninguno y se creó.
+ */
+export type ResultadoAdelanto = 'adelantado' | 'ya_no_esperaba' | 'encolado'
+
+/**
+ * Adelanta un trabajo que estaba agendado a futuro, reemplazándole el payload.
+ *
+ * ## Para qué existe
+ *
+ * `index_code` encola la revisión **dos veces por adelantado**: una la corre el
+ * agente de navegación al terminar (con la evidencia adentro) y la otra es una
+ * red, agendada con `run_after` a futuro, que se dispara sola si el agente nunca
+ * llega a correr. Esta función es el punto donde esas dos se vuelven una: el
+ * agente no encola una revisión nueva, adelanta la que ya está esperando.
+ *
+ * ## La carrera, y por qué no hacen falta dos revisiones
+ *
+ * El caso feo es que el diferimiento venza justo cuando el agente termina: un
+ * worker toma la red mientras nosotros intentamos adelantarla. El `UPDATE` lo
+ * resuelve solo, sin transacción explícita, porque el `.eq('status','queued')`
+ * es un compare-and-set sobre la misma fila que `claim_job` bloquea con
+ * `for update`:
+ *
+ *   - si ganamos, la fila sigue `queued` y se actualiza; el claim posterior se
+ *     la lleva con el payload nuevo;
+ *   - si gana el claim, nuestro `UPDATE` espera el lock, reevalúa, ya no está
+ *     `queued` y toca **cero filas**.
+ *
+ * En ese segundo caso NO se encola otra: la revisión ya está corriendo. Lo que
+ * se pierde es la evidencia del navegador, y eso el informe lo sabe decir —los
+ * chequeos que la necesitan quedan marcados como no revisados—. Duplicar la
+ * revisión, en cambio, sería dos handlers borrando y reinsertando los mismos
+ * `findings` a la vez.
+ *
+ * ## Compatibilidad
+ *
+ * Un `run_browser_agent` encolado por la versión anterior no tiene ninguna red
+ * esperando. Por eso, y solo cuando no existe **ningún** trabajo de ese tipo en
+ * la corrida, se encola uno nuevo: es el comportamiento viejo, intacto, para los
+ * trabajos que ya estaban en la cola cuando salió el cambio.
+ */
+export async function adelantarOEncolar<TPayload = unknown>(
+  input: EnqueueDeCorridaInput<TPayload>,
+): Promise<ResultadoAdelanto> {
+  const db = await jobsDb()
+  const ahora = new Date().toISOString()
+
+  const { data, error } = await db
+    .from(T.jobs)
+    .update({
+      payload: input.payload ?? {},
+      run_after: ahora,
+      updated_at: ahora,
+    })
+    .eq('analysis_run_id', input.analysisRunId)
+    .eq('kind', input.kind)
+    .eq('status', 'queued')
+    .select('id')
+
+  if (error) {
+    throw new Error(
+      `No se pudo adelantar el trabajo "${input.kind}": ${describeDbError(error)}`,
+    )
+  }
+  if (cuantasFilas(data) > 0) return 'adelantado'
+
+  if (await hayTrabajoDeCorrida(db, input.analysisRunId, input.kind)) return 'ya_no_esperaba'
+
+  await enqueue(input)
+  return 'encolado'
+}
+
+/** ¿La corrida ya tiene un trabajo de ese tipo, en cualquier estado? */
+async function hayTrabajoDeCorrida(
+  db: Awaited<ReturnType<typeof jobsDb>>,
+  analysisRunId: string,
+  kind: JobKind,
+): Promise<boolean> {
+  const { data, error } = await db
+    .from(T.jobs)
+    .select('id')
+    .eq('analysis_run_id', analysisRunId)
+    .eq('kind', kind)
+    .limit(1)
+
+  if (error) {
+    throw new Error(
+      `No se pudo saber si la corrida ya tenía un "${kind}": ${describeDbError(error)}`,
+    )
+  }
+  return cuantasFilas(data) > 0
+}
+
+/**
+ * PostgREST devuelve un arreglo cuando se pide `.select()` sobre un `UPDATE`,
+ * pero con `.single()`/`.maybeSingle()` devuelve el objeto suelto. Se contemplan
+ * los dos para que quien llame no tenga que acordarse de cuál era.
+ */
+function cuantasFilas(data: unknown): number {
+  if (Array.isArray(data)) return data.length
+  return data ? 1 : 0
 }
 
 /* ── Tomar un trabajo ─────────────────────────────────────────────────── */
@@ -330,8 +481,19 @@ export async function cancel(jobId: string, reason?: string): Promise<void> {
 /* ── Recuperar trabajos huérfanos ────────────────────────────────────── */
 
 /**
- * Devuelve a la cola todo lo que quedó `running` con el lease vencido.
- * Esto es lo que rescata los trabajos de un worker que se murió.
+ * Devuelve a la cola todo lo que quedó `running` con el lease vencido, y cierra
+ * las corridas de los que ya no vuelven.
+ *
+ * ## Por qué acá se reconcilia
+ *
+ * El RPC marca `failed` **en SQL** a los trabajos que perdieron el lease con los
+ * intentos agotados. Ese camino nunca pasa por el runner, así que nunca pasaba
+ * por `reconcileRunStatus()`: el trabajo quedaba `failed` y su corrida `running`
+ * para siempre, con la pantalla de hallazgos diciendo "Estamos revisando tu app"
+ * hasta el fin de los tiempos. Pasó con dos corridas reales (ver migración 0016).
+ *
+ * Desde 0016 el RPC devuelve qué tocó y en qué estado quedó, que es lo único que
+ * faltaba para poder avisarle a la corrida correcta.
  */
 export async function requeueExpired(): Promise<number> {
   const db = await jobsDb()
@@ -339,10 +501,131 @@ export async function requeueExpired(): Promise<number> {
   if (error) {
     throw new Error(`No se pudieron recuperar los trabajos vencidos: ${describeDbError(error)}`)
   }
+
+  await cerrarCorridasDeLosQueYaNoVuelven(data)
+
   if (typeof data === 'number') return data
   if (Array.isArray(data)) return data.length
   if (data && typeof data === 'object' && 'count' in data) return Number((data as any).count) || 0
   return 0
+}
+
+/**
+ * Reconcilia una vez por corrida distinta que haya quedado con algún trabajo en
+ * `failed`. Tolera que el RPC todavía sea el viejo (un `int`): en ese caso no hay
+ * filas de las que deducir nada y no se hace nada.
+ *
+ * Un cierre que falla no puede tumbar el rescate: los trabajos ya volvieron a la
+ * cola, que es lo importante, y la corrida se reconcilia sola en la próxima
+ * pasada o cuando termine cualquier otro trabajo suyo. Por eso se registra y se
+ * sigue, en vez de cortar y dejar a las demás corridas sin revisar.
+ */
+async function cerrarCorridasDeLosQueYaNoVuelven(data: unknown): Promise<void> {
+  if (!Array.isArray(data)) return
+
+  const corridas = new Set<string>()
+  for (const fila of data as Array<Record<string, any>>) {
+    if (!fila || fila.status !== 'failed') continue
+    const runId = fila.analysis_run_id
+    if (typeof runId === 'string' && runId.length > 0) corridas.add(runId)
+  }
+
+  for (const analysisRunId of corridas) {
+    try {
+      await reconcileRunStatus(analysisRunId)
+    } catch (error) {
+      console.error(
+        `[jobs] no se pudo cerrar la corrida ${analysisRunId} después de rescatar sus trabajos ` +
+          `vencidos: ${describeError(error)}`,
+      )
+    }
+  }
+}
+
+/* ── Candado: un solo tick a la vez ──────────────────────────────────────── */
+
+/** Nombre del único candado que existe hoy: el de la tanda del cron. */
+export const CANDADO_TICK = 'worker_tick'
+
+/**
+ * - `tomado`: el candado es tuyo, tenés que soltarlo.
+ * - `ocupado`: lo tiene otro y todavía no venció. No hagas nada.
+ * - `sin-candado`: la base no pudo darnos un candado (RPC ausente o respuesta
+ *   inesperada). Se sigue igual, que es exactamente el comportamiento de antes
+ *   de que el candado existiera.
+ */
+export type EstadoCandado = 'tomado' | 'ocupado' | 'sin-candado'
+
+/**
+ * Intenta tomar un candado de worker por `ttlSeconds`.
+ *
+ * ## Por qué "sin-candado" en vez de fallar
+ *
+ * Si el RPC no existe todavía (la migración 0016 se aplica después del deploy) o
+ * contesta algo que no es un booleano, la alternativa sería frenar la cola. Un
+ * candado roto no puede ser peor que no tener candado: fallar cerrado dejaría la
+ * cola muerta hasta que alguien lo note. Se avisa fuerte por consola y se sigue.
+ * Cualquier OTRO error de base sí revienta: eso no es "no hay candado", es que la
+ * base no está respondiendo, y ahí procesar la cola no tiene sentido.
+ */
+export async function tomarCandado(
+  nombre: string,
+  titular: string,
+  ttlSeconds: number,
+): Promise<EstadoCandado> {
+  const db = await jobsDb()
+  const { data, error } = await db.rpc(F.tryAcquireWorkerLock, {
+    p_name: nombre,
+    p_holder: titular,
+    p_ttl_seconds: Math.max(5, Math.round(ttlSeconds)),
+  })
+
+  if (error) {
+    if (isMissingFunctionError(error)) {
+      console.warn(
+        `[jobs] el candado "${nombre}" no existe en la base todavía (falta aplicar la migración 0016). ` +
+          'La tanda sigue sin candado: dos ticks pueden pisarse.',
+      )
+      return 'sin-candado'
+    }
+    throw new Error(`No se pudo tomar el candado "${nombre}": ${describeDbError(error)}`)
+  }
+
+  if (data === true) return 'tomado'
+  if (data === false) return 'ocupado'
+
+  console.warn(
+    `[jobs] el candado "${nombre}" contestó ${JSON.stringify(data)} en vez de un booleano. ` +
+      'La tanda sigue sin candado.',
+  )
+  return 'sin-candado'
+}
+
+/**
+ * Suelta el candado. `true` si de verdad era nuestro.
+ *
+ * No tira: esto corre siempre en un `finally`, y una excepción acá taparía el
+ * resultado real de la tanda. Además, no soltarlo no rompe nada: el candado
+ * vence solo.
+ */
+export async function soltarCandado(nombre: string, titular: string): Promise<boolean> {
+  try {
+    const db = await jobsDb()
+    const { data, error } = await db.rpc(F.releaseWorkerLock, {
+      p_name: nombre,
+      p_holder: titular,
+    })
+    if (error) {
+      if (!isMissingFunctionError(error)) {
+        console.error(`[jobs] no se pudo soltar el candado "${nombre}": ${describeDbError(error)}`)
+      }
+      return false
+    }
+    return data === true
+  } catch (error) {
+    console.error(`[jobs] no se pudo soltar el candado "${nombre}": ${describeError(error)}`)
+    return false
+  }
 }
 
 /* ── Lecturas ────────────────────────────────────────────────────────── */

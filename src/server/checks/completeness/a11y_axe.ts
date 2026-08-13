@@ -21,7 +21,7 @@ export const a11yAxe = defineCheck({
   id: 'cmp.a11y_axe',
   pillar: 'completeness',
   name: 'a11y-axe',
-  requires: ['deployed_app'],
+  requires: ['deployed_app', 'browser_run'],
   async run(ctx): Promise<FindingDraft[]> {
     const todos = ctx.agent?.a11y ?? []
     const problemas = todos.filter((p) => IMPACTO_MINIMO.has(p.impacto))

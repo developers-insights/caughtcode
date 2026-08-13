@@ -12,7 +12,7 @@ export const noLogout = defineCheck({
   id: 'cmp.no_logout',
   pillar: 'completeness',
   name: 'no-logout',
-  requires: ['code', 'deployed_app'],
+  requires: ['code', 'deployed_app', 'browser_run'],
   async run(ctx): Promise<FindingDraft[]> {
     return chequearFlujoFaltante(ctx, {
       catalogId: 'cmp.no_logout',
