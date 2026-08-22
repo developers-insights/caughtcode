@@ -1,0 +1,102 @@
+# Puerta de calidad automática.
+#
+# Existe porque una regla escrita en un documento dura hasta el primer martes
+# ocupado. `CLAUDE.md` pide árbol verde antes de cerrar sesión y `/security-review`
+# antes de cada release — pero hasta hoy nada de eso lo verificaba una máquina, y
+# se notó: `pnpm lint` estuvo meses sin poder ejecutarse y nadie se enteró hasta
+# que alguien lo corrió a mano.
+#
+# Corre lo mismo que `pnpm verificar` en local, con una diferencia: acá cada etapa
+# es un paso propio, para que en la pestaña de Actions se vea cuál falló sin tener
+# que leer un log entero. `continue-on-error` en las primeras hace que se reporten
+# todas las que estén rotas de una vez, en vez de una por corrida.
+
+name: Verificar
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  verificar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      # Sin `--frozen-lockfile` esto no verifica nada: instalaría lo que haga
+      # falta y taparía justo el caso que rompe el Dockerfile en Railway, que
+      # sí lo usa.
+      - name: Instalar dependencias
+        run: pnpm install --frozen-lockfile
+
+      - name: Tipos
+        id: tipos
+        continue-on-error: true
+        run: pnpm typecheck
+
+      - name: Lint
+        id: lint
+        continue-on-error: true
+        run: pnpm lint
+
+      - name: Tests
+        id: tests
+        continue-on-error: true
+        run: pnpm test
+
+      - name: Build
+        id: build
+        continue-on-error: true
+        run: pnpm build
+
+      # La única etapa que prueba el producto de punta a punta: baja un
+      # repositorio público de verdad, lo indexa y le corre los chequeos. Los
+      # tests prueban cada motor por separado contra fixtures; esto prueba que
+      # el producto hace lo que promete sobre código que nadie preparó.
+      #
+      # Necesita red, pero no base de datos, ni cola, ni ANTHROPIC_API_KEY.
+      - name: Auditoría de un repositorio real
+        id: auditoria
+        continue-on-error: true
+        run: pnpm auditar
+
+      # Con `continue-on-error` arriba, el job termina en verde aunque algo haya
+      # fallado. Este paso es el que lo baja: sin él, la puerta estaría abierta
+      # siempre y daría una falsa sensación de cobertura, que es peor que no
+      # tener CI.
+      - name: Resultado
+        run: |
+          fallo=0
+          for etapa in tipos:${{ steps.tipos.outcome }} \
+                       lint:${{ steps.lint.outcome }} \
+                       tests:${{ steps.tests.outcome }} \
+                       build:${{ steps.build.outcome }} \
+                       auditoria:${{ steps.auditoria.outcome }}; do
+            nombre="${etapa%%:*}"
+            estado="${etapa##*:}"
+            if [ "$estado" = "success" ]; then
+              echo "OK    $nombre"
+            else
+              echo "FALLA $nombre"
+              fallo=1
+            fi
+          done
+          if [ "$fallo" = "1" ]; then
+            echo ""
+            echo "Hay etapas en rojo. Miralas arriba: cada una es un paso propio."
+            exit 1
+          fi
+          echo ""
+          echo "Todo en verde."
