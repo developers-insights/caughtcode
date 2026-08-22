@@ -153,6 +153,23 @@ quedaba mudo. Ahora solo se le ceden al botón Espacio y Enter, que son las tecl
 navegue solo con teclado llega a los botones pero no a los atajos. Hacerlo tabulable agrega una parada
 al recorrido y no se puede evaluar bien sin un video a la vista.
 
+### Ahora hay CI, y encontró un bug en su primera corrida
+
+`.github/workflows/verificar.yml` corre lo mismo que `pnpm verificar` en cada PR y en cada push a
+`main`, con cada etapa como paso propio. Existe porque una regla escrita en un documento dura hasta el
+primer martes ocupado: `CLAUDE.md` pedía árbol verde antes de cerrar sesión, nada lo verificaba, y el
+resultado fue `pnpm lint` meses sin poder ejecutarse sin que nadie se enterara.
+
+**En su primera corrida encontró algo que la verificación local no podía encontrar.** pnpm 10 bloquea
+los scripts de `postinstall` salvo que se los declare, así que `ffmpeg-static` **no bajaba su binario**.
+El código cae entonces al `ffmpeg` del sistema, que puede no existir → `spawn ffmpeg ENOENT` y el render
+de video muerto en runtime. Funcionaba en la máquina de desarrollo y en el build de Docker por cómo
+quedaba configurado cada entorno, **no por diseño**. Declarado en `package.json`
+(`pnpm.onlyBuiltDependencies`), ahora es determinístico en los tres.
+
+El CI instala Chromium a propósito (`playwright install --with-deps chromium`): los tests del agente
+navegador y del render de video no se saltean, son los del corazón del producto.
+
 ### Estado verificado (2026-08-22)
 
 | Qué | Estado |
@@ -162,6 +179,8 @@ al recorrido y no se puede evaluar bien sin un video a la vista.
 | `pnpm build` | compila |
 | `pnpm lint` | **0 errores** — corre por primera vez en meses |
 | `docker build` | **construye** (primera vez, en Railway) |
+| CI en GitHub Actions | **verde en `main`** — typecheck, lint, tests con Chromium, build y auditoría real |
+| App en Vercel | responde 200, deployada con este código |
 | Base de datos | 1 org · 4 proyectos · 204 hallazgos · 6 corridas · **0 trabajos pendientes** · 0 videos |
 
 ---

@@ -130,3 +130,20 @@ explotación real (JWT de un tercero contra datos de otra organización, todo de
 mutación que confirma que el test detecta el agujero si se lo introduce. Red de contención nueva:
 `supabase/tests/rpc_autorizacion.sql`. Los WARN de `get_advisors` sobre estas funciones son
 **esperados**: son para que las llame el navegador, y validan al llamante por dentro.
+
+**pnpm 10 bloquea los `postinstall` y eso puede romper el video en producción sin avisar.** El
+mensaje `Ignored build scripts: esbuild, ffmpeg-static` es fácil de pasar por alto en un log de
+instalación. Sin su postinstall, `ffmpeg-static` no baja el binario, el código cae al `ffmpeg` del
+sistema y el render muere con `spawn ffmpeg ENOENT` — en runtime, no al instalar. Funcionaba en la
+máquina de desarrollo y en el build de Docker por cómo quedaba configurado cada entorno, no por
+diseño. Se arregla declarándolos en `package.json` → `pnpm.onlyBuiltDependencies`. Lo encontró el CI
+en su primera corrida.
+
+**El CI necesita Chromium explícito.** `playwright install --with-deps chromium` antes de los tests,
+o fallan los del agente navegador y los del render de video. Solo Chromium: es el único que usa el
+worker, igual que la imagen del `Dockerfile`.
+
+**El autodeploy de Railway no se disparó con el merge a `main`.** El servicio había agotado sus 10
+reintentos y quedó en `CRASHED`; el push no lo despertó. `redeploy` no sirve para probar código
+nuevo — reusa el build anterior. Cargar las variables que faltan y darle **Deploy** al banner es lo
+que va a construir el commit nuevo.
