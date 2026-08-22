@@ -41,6 +41,15 @@ jobs:
       - name: Instalar dependencias
         run: pnpm install --frozen-lockfile
 
+      # Sin esto fallan los tests del agente navegador y del render de video:
+      # el runner no trae navegadores. No se saltean —son los del corazón del
+      # producto, justo los que no se pueden verificar de otra forma— así que se
+      # instala Chromium. Solo Chromium, y no los tres navegadores, porque es el
+      # único que usa el worker (ver el `Dockerfile`, que parte de la imagen
+      # oficial de Playwright por la misma razón).
+      - name: Instalar Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
       - name: Tipos
         id: tipos
         continue-on-error: true
