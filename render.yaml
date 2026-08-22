@@ -1,4 +1,12 @@
 # ============================================================================
+# ⚠️ OBSOLETO (2026-08-22): este Blueprint NO es el camino de deploy vigente.
+# El worker se creó en Railway (proyecto "caughtcode", servicio
+# "caughtcode-worker") — ver docs/DEPLOY-RAILWAY.md y railway.json en la raíz.
+# Este archivo se deja sin borrar porque sigue siendo un registro útil de qué
+# variables de entorno necesita el worker (sección envVars más abajo) y del
+# análisis de recursos que se hizo al mover el worker fuera de Vercel — no
+# porque haya que desplegar contra él.
+# ----------------------------------------------------------------------------
 # caughtcode · Blueprint de Render para el worker dedicado
 # ----------------------------------------------------------------------------
 # Reemplaza (en la práctica) al cron de Vercel para todo el trabajo pesado:

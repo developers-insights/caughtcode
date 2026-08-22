@@ -67,6 +67,72 @@ export const ANTES_DE_REVISAR = {
   },
 }
 
+/**
+ * Lo que se le dice al usuario **antes** de gastarle plata.
+ *
+ * Regla dura del producto: el costo va en dólares y en unidades concretas antes
+ * de ejecutar, nunca en "créditos". La queja universal de la categoría es
+ * justamente esa —"no sé cuánto me va a salir hasta que ya me lo cobraron"—, y
+ * este diálogo existe para no cometerla.
+ *
+ * Tres cosas tiene que poder hacer alguien que lee esto: entender qué va a
+ * pasar, ver cuánto sale, y salirse sin consecuencias.
+ */
+export const CONFIRMAR_REVISION = {
+  /** Primera revisión del proyecto. */
+  primeraVez: {
+    titulo: '¿Arrancamos con la revisión?',
+    accion: 'Sí, revisar',
+  },
+  /** Ya hay resultados en pantalla: esta corrida los reemplaza. */
+  otraVez: {
+    titulo: '¿La revisamos de nuevo?',
+    accion: 'Sí, revisar de nuevo',
+  },
+  cancelar: 'Ahora no',
+
+  /** Qué va a pasar, en concreto. Lo mismo en los dos casos. */
+  consecuencias: [
+    'Leemos tu código y entramos a tu app publicada como entraría cualquier visitante.',
+    'No escribimos nada en tu base de datos y no tocamos tu app.',
+    'Tarda unos minutos. Podés cerrar la pantalla: los resultados quedan acá.',
+  ],
+  /** Se suma a las anteriores cuando ya hay hallazgos en pantalla. */
+  consecuenciaReemplazo: 'Lo que ves ahora se reemplaza por los resultados nuevos.',
+
+  costo: {
+    calculando: 'Sacando la cuenta…',
+    /** (n) → "Calculado sobre los 128 archivos de tu proyecto." */
+    medido: (archivos: number) =>
+      archivos === 1
+        ? 'Calculado sobre el único archivo de tu proyecto. Puede moverse unos centavos.'
+        : `Calculado sobre los ${archivos} archivos de tu proyecto. Puede moverse unos centavos.`,
+    /** Todavía no lo medimos: se calcula sobre el techo, y se avisa. */
+    sinMedir:
+      'Todavía no medimos tu proyecto, así que sacamos la cuenta sobre el tamaño más grande que analizamos. Lo más probable es que salga menos.',
+  },
+
+  falla: {
+    titulo: 'No pudimos calcular cuánto sale',
+    texto:
+      'No arrancamos nada sin decirte el precio antes. Cerrá esto y volvé a intentar en un momento.',
+  },
+
+  /** El encolado falló después de confirmar. */
+  noArranco: 'No pudimos poner la revisión en la fila. Probá de nuevo.',
+}
+
+/**
+ * El texto crudo que devolvió el motor.
+ *
+ * No se borra: se guarda plegado. Al usuario no le sirve —y por eso no puede
+ * ser lo primero que ve—, pero si nos escribe, es lo único que nos deja
+ * entender qué pasó.
+ */
+export const DETALLE_TECNICO = {
+  abrir: 'Ver el detalle técnico',
+}
+
 export const COBERTURA = {
   titulo: 'Todo lo que revisamos',
   volver: 'Volver a los hallazgos',
@@ -247,6 +313,8 @@ export const EVIDENCIA = {
 export const TEXTOS_VISIBLES: string[] = [
   ...Object.values(LISTA).flatMap(aplanar),
   ...Object.values(ANTES_DE_REVISAR).flatMap(aplanar),
+  ...Object.values(CONFIRMAR_REVISION).flatMap(aplanar),
+  ...Object.values(DETALLE_TECNICO).flatMap(aplanar),
   ...Object.values(CORTE).flatMap(aplanar),
   ...Object.values(COBERTURA).flatMap(aplanar),
   ...Object.values(PROGRESO).flatMap(aplanar),

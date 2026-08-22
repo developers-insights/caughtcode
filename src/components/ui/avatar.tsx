@@ -50,6 +50,12 @@ export function Avatar({
 }: AvatarProps) {
   return (
     <span
+      // No puede ser un `<img>`: es un elemento vacío y acá adentro va texto
+      // —las iniciales— cuando no hay foto. `role="img"` con `aria-label` sobre
+      // un contenedor es justo la técnica que ARIA recomienda para un dibujo
+      // hecho de texto: el lector de pantalla anuncia el nombre una sola vez y
+      // no deletrea las iniciales.
+      // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role
       role="img"
       aria-label={name}
       className={cn(

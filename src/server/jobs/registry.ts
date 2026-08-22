@@ -54,6 +54,32 @@ export const JOB_KIND_LABEL: Record<JobKind, string> = {
 
 export const JOB_KINDS = Object.keys(JOB_KIND_LABEL) as JobKind[]
 
+/**
+ * Capacidades **declaradas y todavía no construidas**. No están rotas: nunca se
+ * escribieron.
+ *
+ * `build_tutorials` son los videos de "cómo funciona mi proyecto", distintos de
+ * los videos de hallazgo (esos sí funcionan, son `generate_video`). El tipo
+ * existe desde el día uno —está en `domain.ts`, en el `check` de la migración
+ * `0003` y en el catálogo de acá— pero no hay motor detrás y **no hay
+ * especificación**: escribir uno a ojo sería inventar producto.
+ *
+ * Que figure acá es lo que hace que el sistema degrade con honestidad: si
+ * alguien lo encolara, el trabajo falla al instante con "esto todavía no lo
+ * sabemos hacer" (ver `HandlerNotRegisteredError`) en vez de con jerga de
+ * infraestructura, no se reintenta, y como no es un trabajo de revisión
+ * (`TRABAJOS_DE_REVISION` en `@/lib/types/domain`) no tiñe el estado de la
+ * auditoría: la corrida cierra igual. Está encerrado en
+ * `tests/jobs/build-tutorials.test.ts`.
+ *
+ * **Si venís a construirla:** registrá el handler real como cualquier otro
+ * frente (`registerHandler('build_tutorials', ...)` desde
+ * `src/server/video/handlers.ts`, que es su dueño natural) y sacá el tipo de
+ * esta lista. El test de arriba te va a marcar si encolás sin hacer las dos
+ * cosas.
+ */
+export const CAPACIDADES_SIN_MOTOR: readonly JobKind[] = ['build_tutorials']
+
 export function isJobKind(value: unknown): value is JobKind {
   return typeof value === 'string' && value in JOB_KIND_LABEL
 }
@@ -98,11 +124,18 @@ interface RegistryEntry {
   isStub: boolean
 }
 
+function sinHandler(kind: JobKind): HandlerNotRegisteredError {
+  return new HandlerNotRegisteredError(kind, {
+    etapa: JOB_KIND_LABEL[kind],
+    sinMotor: CAPACIDADES_SIN_MOTOR.includes(kind),
+  })
+}
+
 function stubFor(kind: JobKind): RegistryEntry {
   return {
     isStub: true,
     handler: async () => {
-      throw new HandlerNotRegisteredError(kind)
+      throw sinHandler(kind)
     },
   }
 }
@@ -122,7 +155,8 @@ export function registerHandler<TPayload = any>(
 export function getHandler(kind: JobKind): JobHandler {
   const entry = registry.get(kind)
   if (!entry) {
-    // Un `kind` que llegó de la base pero no existe en el código.
+    // Un `kind` que llegó de la base pero no existe en el código: no tiene
+    // etiqueta que mostrar, así que el error usa su texto genérico.
     return async () => {
       throw new HandlerNotRegisteredError(kind)
     }

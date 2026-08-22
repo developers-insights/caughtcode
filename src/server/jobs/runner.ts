@@ -184,6 +184,45 @@ export async function runClaimedJob(
   } finally {
     clearInterval(ticker)
     controller.abort()
+    // El que hace el trabajo es el único que puede limpiar SU disco: el borrado
+    // por corrida corre donde la corrida cierra, que no siempre es la máquina
+    // que bajó el código. Ver `limpieza.ts`.
+    await barrerElDiscoDeVezEnCuando(jobLog)
+  }
+}
+
+/**
+ * Saca del disco de este proceso el código que ya nadie puede necesitar.
+ *
+ * Va acá y no en un cron aparte porque **este** es el proceso que escribe en
+ * ese disco: el tick de Vercel y el worker de Railway tienen discos distintos, y
+ * un barrido disparado en uno no ve el del otro.
+ *
+ * Se cuelga del final de un trabajo, pero no es parte del trabajo: se saltea
+ * sola si no hay un disco propio configurado, corre como mucho una vez por hora
+ * (ver `barrerCodigoHuerfanoSiToca`) y no puede tirar. El trabajo ya terminó y
+ * su resultado ya está escrito: un problema barriendo no puede cambiar eso.
+ *
+ * El import es tardío a propósito, igual que en `reconcile.ts`: la limpieza
+ * termina cargando `workspace.ts`, que arranca con `import 'server-only'`.
+ */
+async function barrerElDiscoDeVezEnCuando(jobLog: (message: string) => void): Promise<void> {
+  try {
+    const { barrerCodigoHuerfanoSiToca } = await import('./limpieza')
+    const informe = await barrerCodigoHuerfanoSiToca()
+    if (!informe) return
+    if (informe.borradas.length > 0) {
+      const megas = (informe.bytesLiberados / 1_048_576).toFixed(1)
+      jobLog(
+        `Limpieza de disco: borré el código de ${informe.borradas.length} corrida(s) que ya nadie ` +
+          `usa (${megas} MB).`,
+      )
+    }
+    for (const ruta of informe.fallidas) {
+      jobLog(`Limpieza de disco: ${ruta} sigue ahí después de intentar borrarla.`)
+    }
+  } catch (error) {
+    jobLog(`No se pudo barrer el disco: ${describeError(error)}`)
   }
 }
 

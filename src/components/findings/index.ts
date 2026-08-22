@@ -20,13 +20,28 @@ export {
   ReviewNotStarted,
   ReviewQueued,
   ReviewRetryAction,
+  ReviewRunAction,
   ReviewStalled,
   type ReviewFailedProps,
   type ReviewNotStartedProps,
   type ReviewQueuedProps,
   type ReviewRetryActionProps,
+  type ReviewRunActionProps,
   type ReviewStalledProps,
 } from './review-state'
+
+/* Precio antes del gasto: la máquina de estados de la confirmación. */
+export {
+  dialogoAbierto,
+  encolarSiSeConfirmoElPrecio,
+  puedeEncolar,
+  siguientePaso,
+  type EventoDeConfirmacion,
+  type PasoDeConfirmacion,
+  type PresupuestoDeRevision,
+} from './run-cost'
+
+export { TechnicalDetail, type TechnicalDetailProps } from './technical-detail'
 export {
   RunFailedNotice,
   RunPartialNotice,

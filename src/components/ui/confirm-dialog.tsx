@@ -1,10 +1,11 @@
 'use client'
 
-import { useEffect, useState, type ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import { cn, formatUsd } from '@/lib/utils'
 import { Button } from './button'
 import { Dialog } from './dialog'
 import { Input } from './input'
+import { Spinner } from './spinner'
 
 export interface ConfirmCost {
   /** Costo en dólares. Se muestra siempre, aunque sea 0. */
@@ -15,6 +16,11 @@ export interface ConfirmCost {
    * Nunca "créditos": el usuario no sabe cuánto vale un crédito.
    */
   units?: string
+  /**
+   * Aclaración sobre cómo salió el número: sobre qué se calculó, si es un
+   * techo, cuánto puede moverse. Va debajo, chica, sin competir con la cifra.
+   */
+  nota?: string
 }
 
 export interface ConfirmDialogProps {
@@ -26,6 +32,16 @@ export interface ConfirmDialogProps {
   consequences?: ReactNode[]
   /** Costo. Si lo pasás, se muestra ANTES de que el usuario confirme. */
   cost?: ConfirmCost
+  /**
+   * El precio todavía se está calculando. El pozo muestra la espera y el botón
+   * de confirmar queda bloqueado: no se gasta lo que no se sabe cuánto cuesta.
+   */
+  costPending?: ReactNode
+  /**
+   * No se pudo calcular el precio. Se dice por qué y **no se puede confirmar**.
+   * Preferimos hacer reintentar a alguien antes que cobrarle sin avisarle.
+   */
+  costError?: ReactNode
   /** Acción destructiva: botón rojo y tono de alerta. */
   destructive?: boolean
   /**
@@ -54,6 +70,8 @@ export function ConfirmDialog({
   description,
   consequences,
   cost,
+  costPending,
+  costError,
   destructive = false,
   requireTyping,
   confirmLabel = 'Confirmar',
@@ -62,11 +80,26 @@ export function ConfirmDialog({
   onConfirm,
 }: ConfirmDialogProps) {
   const [typed, setTyped] = useState('')
-  const unlocked = !requireTyping || typed.trim() === requireTyping
+  /**
+   * Sin precio en pantalla no se confirma. La regla dura vive acá adentro, no
+   * en cada pantalla que use el diálogo: si el número está en camino o no se
+   * pudo sacar, el botón no habilita.
+   */
+  const conPrecio = !costPending && !costError
+  const unlocked = conPrecio && (!requireTyping || typed.trim() === requireTyping)
 
-  useEffect(() => {
+  /*
+   * Al cerrarse, el diálogo se olvida de lo que había escrito. Se ajusta en el
+   * render y no en un `useEffect`: es un cambio de estado que responde a otro
+   * estado, no una sincronización con nada de afuera, y React lo rehace antes
+   * de pintar. Con el efecto quedaba, por un pintado, un diálogo cerrándose con
+   * el texto de confirmación todavía adentro.
+   */
+  const [eraAbierto, setEraAbierto] = useState(open)
+  if (eraAbierto !== open) {
+    setEraAbierto(open)
     if (!open) setTyped('')
-  }, [open])
+  }
 
   return (
     <Dialog
@@ -111,13 +144,42 @@ export function ConfirmDialog({
           </ul>
         )}
 
-        {cost && (
-          <div className="rounded-md border border-line bg-canvas-sunken p-4">
-            <div className="flex items-baseline justify-between gap-4">
-              <span className="text-sm text-ink-muted">Lo que vas a gastar</span>
-              <span className="text-xl font-semibold tabular text-ink">{formatUsd(cost.usd)}</span>
-            </div>
-            {cost.units && <p className="mt-1.5 text-sm text-ink-muted">{cost.units}</p>}
+        {/* El pozo del precio. Es lo único que cambia de forma según el estado:
+            el número, la espera y la falla ocupan el mismo lugar, así que la
+            caja nunca desaparece ni salta de tamaño mientras se resuelve. */}
+        {(cost || costPending || costError) && (
+          <div
+            aria-live="polite"
+            className={cn(
+              'rounded-md border p-4',
+              costError ? 'border-expuesto-border bg-expuesto-soft' : 'border-line bg-canvas-sunken',
+            )}
+          >
+            {costError ? (
+              <div className="space-y-1.5 text-sm leading-relaxed text-expuesto-text">
+                {costError}
+              </div>
+            ) : costPending ? (
+              <div className="flex items-center gap-3 text-sm text-ink-muted">
+                <Spinner size="sm" className="text-ink-subtle" />
+                <span>{costPending}</span>
+              </div>
+            ) : cost ? (
+              <>
+                <div className="flex items-baseline justify-between gap-4">
+                  <span className="text-sm text-ink-muted">Lo que vas a gastar</span>
+                  <span className="text-xl font-semibold tabular text-ink">
+                    {formatUsd(cost.usd)}
+                  </span>
+                </div>
+                {cost.units && <p className="mt-1.5 text-sm text-ink-muted">{cost.units}</p>}
+                {cost.nota && (
+                  <p className="mt-2 border-t border-line pt-2 text-xs leading-relaxed text-ink-muted">
+                    {cost.nota}
+                  </p>
+                )}
+              </>
+            ) : null}
           </div>
         )}
 

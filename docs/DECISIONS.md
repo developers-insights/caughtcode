@@ -266,6 +266,42 @@ En auditorías SEO el patrón es idéntico: *"cuando el cliente ve cientos de fi
 
 ---
 
+## D20 — El worker vive en Railway, no en Render (2026-08-22)
+
+**Decisión:** el worker de proceso largo se despliega en **Railway** como servicio Docker con autodeploy desde `main`. `render.yaml` y `docs/DEPLOY-WORKER.md` quedan como registro histórico; la guía viva es `docs/DEPLOY-RAILWAY.md`.
+
+**Por qué:** el análisis técnico que sacó al worker de Vercel sigue valiendo entero (OOM real de la función serverless + Playwright que no se empaqueta con Chromium). Lo que cambió es el proveedor: Railway está pago y funcionando. Ninguna de las razones para irse de Vercel era específica de Render.
+
+**`WORKER_CONCURRENCY=1`.** La justificación de "plan Pro para bancar concurrencia 2" era de Render, que cobra por plan fijo. Railway cobra por uso real, así que pagar CPU ocioso para tener un segundo carril no se sostiene solo. Con concurrencia 1 el peor caso es ~250 MB del worker + ~500 MB de Chromium + el índice del repo. Se sube si la cola se hace larga, que es un problema que todavía no tenemos.
+
+**Verificado el 2026-08-22:** el `Dockerfile` se construyó por primera vez (nunca había corrido: no hay Docker en la máquina de desarrollo). Imagen de 1.13 GB sobre `mcr.microsoft.com/playwright:v1.62.1-noble`, `pnpm install --frozen-lockfile` limpio, `/data/caughtcode-storage` creado con dueño `pwuser`.
+
+**Nota para el futuro:** Railway marcó `railway.json` (Config as Code) como deprecado a favor de `.railway/railway.ts`, con corte duro el **2026-12-01**. Migrarlo antes de esa fecha.
+
+---
+
+## D21 — El linter es oxlint, no ESLint (2026-08-22)
+
+**Decisión:** `pnpm lint` corre **oxlint**, configurado en `.oxlintrc.json`.
+
+**Por qué:** `pnpm lint` llevaba tiempo sin poder ejecutarse. `eslint-config-next` importa `typescript-eslint` desde su propio `index.js`, y `typescript-eslint` aborta con *"does not support TS 7.0"* apenas se lo carga. Este repo usa `typescript@7.0.2`.
+
+Verificado contra el registro de npm el 2026-08-22: **ninguna versión publicada de `typescript-eslint` soporta TypeScript 7**, ni la última estable (8.67.0) ni las alpha (8.67.1-alpha.25). Todas declaran el mismo peer, `typescript >=4.8.4 <6.1.0`. O sea que no era cuestión de actualizar y esperar.
+
+Las alternativas que se descartaron, y por qué:
+
+- **Bajar el compilador a TS 6.** Degradar todo el proyecto para que corra un linter. Además `typescript` acá se importa en runtime desde el motor de comentarios, así que el downgrade no era solo de tipado.
+- **Correr typescript-eslint side-by-side con TS 6**, que es lo que recomienda el propio equipo de TypeScript. No aplica: el `.npmrc` fija `node-linker=hoisted` (por una razón sólida — Vercel no puede empaquetar los `.wasm` de tree-sitter a través de los symlinks de pnpm), y con el árbol aplanado no puede haber dos versiones de `typescript`. Se probó con `pnpm.overrides` y el parser siguió resolviendo la 7.0.2.
+- **Dejar `pnpm lint` fuera de servicio.** Es lo que estaba pasando, y tuvo costo: al volver a correr el linter aparecieron **27 errores reales** de accesibilidad y de React que nadie estaba viendo.
+
+**Qué se gana:** oxlint entiende TypeScript nativamente, sin depender de `typescript-eslint`, y trae plugins de Next.js, React, jsx-a11y, import y promise — o sea que cubre lo que daba `eslint-config-next` y algo más. Es además mucho más rápido.
+
+**Qué se pierde:** las reglas de `@typescript-eslint` que necesitan información de tipos. Buena parte de ese terreno ya lo cubre `pnpm typecheck` (`tsc --noEmit`), que corre limpio.
+
+Si algún día `typescript-eslint` soporta TS 7, volver a ESLint es una opción, no una obligación: conviene medirlo antes contra lo que oxlint ya está dando.
+
+---
+
 ## Riesgos vivos (revisar periódicamente)
 
 | Riesgo | Estado |

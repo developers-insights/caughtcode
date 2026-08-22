@@ -166,9 +166,10 @@ describe('estadoDeRevision', () => {
 
   it('con el trabajo fallado y sin corrida: falló, y el motivo es el del trabajo', () => {
     const trabajos = [job({ status: 'failed', lastError: 'Ese repositorio es privado.' })]
+    // Ya está en criollo: pasa tal cual y no hay detalle técnico que plegar.
     expect(estadoDeRevision(null, trabajos)).toEqual({
       fase: 'fallada',
-      motivo: 'Ese repositorio es privado.',
+      motivo: { mensaje: 'Ese repositorio es privado.', detalle: null },
     })
   })
 
@@ -194,7 +195,7 @@ describe('estadoDeRevision', () => {
     const trabajos = [job({ status: 'failed', lastError: 'Otro motivo.' })]
     expect(estadoDeRevision(cortada, trabajos)).toEqual({
       fase: 'fallada',
-      motivo: 'No pudimos entrar a tu app.',
+      motivo: { mensaje: 'No pudimos entrar a tu app.', detalle: null },
     })
   })
 
@@ -203,7 +204,7 @@ describe('estadoDeRevision', () => {
     const trabajos = [job({ status: 'failed', lastError: 'Se acabó el tiempo.' })]
     expect(estadoDeRevision(cortada, trabajos)).toEqual({
       fase: 'fallada',
-      motivo: 'Se acabó el tiempo.',
+      motivo: { mensaje: 'Se acabó el tiempo.', detalle: null },
     })
   })
 

@@ -1,3 +1,10 @@
+> ⚠️ **OBSOLETO (2026-08-22).** El worker no se desplegó en Render — el dueño
+> del producto pagó **Railway** y el servicio (`caughtcode-worker`) ya está
+> creado ahí. Esta guía queda como registro histórico de por qué el worker
+> salió de Vercel y del análisis de recursos que se hizo en su momento, pero
+> **no es el camino de deploy vigente**. La guía viva es
+> [`docs/DEPLOY-RAILWAY.md`](./DEPLOY-RAILWAY.md).
+
 # Desplegar el worker en Render
 
 > Guía operativa para poner en marcha `pnpm worker` (`scripts/worker.ts`) como

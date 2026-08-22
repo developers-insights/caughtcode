@@ -16,7 +16,8 @@ import type {
   Severity,
   VideoScript,
 } from '@/lib/types/domain'
-import { PILLAR_LABEL, SEVERITY_ORDER } from '@/lib/types/domain'
+import { PILLAR_LABEL, SEVERITY_ORDER, TRABAJOS_DE_REVISION } from '@/lib/types/domain'
+import { traducirErrorTecnico, type ErrorLegible } from '@/content/lenguaje'
 
 /** Regla dura del producto (D15). Nunca más de tres "hacé esto ya". */
 export const MAX_DESTACADOS = 3
@@ -85,14 +86,12 @@ export interface JobView {
  *
  * `scan_comments` y `build_tutorials` son de otras pantallas: si uno de esos
  * falla, no tiene nada que decir acá y no puede teñir el estado de la revisión.
+ *
+ * La lista vive en `@/lib/types/domain`, compartida con el servidor
+ * (`@/server/jobs/reconcile`). Se re-exporta para no romper a quien la
+ * importaba desde este módulo.
  */
-export const TRABAJOS_DE_REVISION: readonly JobKind[] = [
-  'ingest_repo',
-  'index_code',
-  'run_checks',
-  'run_browser_agent',
-  'generate_video',
-]
+export { TRABAJOS_DE_REVISION }
 
 export function esTrabajoDeRevision(trabajo: Pick<JobView, 'kind'>): boolean {
   return TRABAJOS_DE_REVISION.includes(trabajo.kind)
@@ -234,8 +233,16 @@ export type EstadoDeRevision =
    * motor no avisó nada — por eso no hay `motivo` que mostrar.
    */
   | { fase: 'abandonada'; run: RunView }
-  /** Se cortó o ni arrancó. `motivo` es lo que dijo el motor, tal cual. */
-  | { fase: 'fallada'; motivo: string | null }
+  /**
+   * Se cortó o ni arrancó.
+   *
+   * `motivo` **no** es lo que dijo el motor tal cual: pasa antes por
+   * `traducirErrorTecnico()`. El texto crudo —un error de Postgres, una traza
+   * de Node— queda en `motivo.detalle` para mostrarlo plegado, nunca como el
+   * texto principal. Es la regla dura de cero jerga en pantalla: el tipo mismo
+   * hace que renderizar el crudo sea un acto deliberado y no un descuido.
+   */
+  | { fase: 'fallada'; motivo: ErrorLegible | null }
   /** Terminó. Recién acá tiene sentido hablar de lo que se encontró. */
   | { fase: 'lista'; run: RunView }
 
@@ -265,7 +272,9 @@ export function estadoDeRevision(
 
   const ultimo = propios[0]
   if (!ultimo) return { fase: 'sin-revisar' }
-  if (ultimo.status === 'failed') return { fase: 'fallada', motivo: ultimo.lastError }
+  if (ultimo.status === 'failed') {
+    return { fase: 'fallada', motivo: traducirErrorTecnico(ultimo.lastError) }
+  }
   if (propios.some((t) => t.status === 'queued' || t.status === 'running')) {
     return { fase: 'en-cola' }
   }
@@ -275,9 +284,20 @@ export function estadoDeRevision(
   return { fase: 'sin-revisar' }
 }
 
-function motivoDelCorte(run: RunView, trabajos: readonly JobView[]): string | null {
-  if (run.error?.trim()) return run.error
-  return trabajos.find((t) => t.status === 'failed' && t.lastError?.trim())?.lastError ?? null
+/**
+ * Por qué se cortó, ya en criollo.
+ *
+ * Antes esto devolvía el texto del motor tal cual y terminaba impreso en la
+ * pantalla: al usuario le podía llegar un error crudo de Postgres, que no le
+ * dice nada y encima lo asusta. Ahora sale traducido, con el original
+ * disponible pero plegado (ver `traducirErrorTecnico`).
+ */
+function motivoDelCorte(run: RunView, trabajos: readonly JobView[]): ErrorLegible | null {
+  const crudo =
+    run.error?.trim() ||
+    trabajos.find((t) => t.status === 'failed' && t.lastError?.trim())?.lastError ||
+    null
+  return traducirErrorTecnico(crudo)
 }
 
 /* ── Orden y agrupación ────────────────────────────────────────────────── */
@@ -425,6 +445,44 @@ export function cuesDelGuion(script: VideoScript | null | undefined): Cue[] {
 /** Qué subtítulo corresponde al segundo actual de reproducción. */
 export function cueActivo(cues: readonly Cue[], seconds: number): Cue | null {
   return cues.find((c) => seconds >= c.startSeconds && seconds < c.endSeconds) ?? null
+}
+
+/** `HH:MM:SS.mmm`, que es el único formato de tiempo que acepta WebVTT. */
+function tiempoVtt(seconds: number): string {
+  const total = Math.max(0, Math.round((Number.isFinite(seconds) ? seconds : 0) * 1000))
+  const dos = (n: number) => String(n).padStart(2, '0')
+  const h = Math.floor(total / 3_600_000)
+  const m = Math.floor((total % 3_600_000) / 60_000)
+  const s = Math.floor((total % 60_000) / 1000)
+  return `${dos(h)}:${dos(m)}:${dos(s)}.${String(total % 1000).padStart(3, '0')}`
+}
+
+/**
+ * Los mismos subtítulos, pero como pista WebVTT de verdad.
+ *
+ * El reproductor los dibuja él mismo para que se vean igual en los dos temas,
+ * y eso alcanzaba para quien mira la pantalla. No alcanza para el resto: sin
+ * una pista `<track>` real, el navegador y el lector de pantalla no tienen
+ * forma de saber que este video **tiene** subtítulos, ni de ofrecerlos donde
+ * nuestra capa no llega (pantalla completa nativa, picture-in-picture, el
+ * reproductor propio de iOS). El dato ya estaba; lo que faltaba era publicarlo
+ * en el formato que el navegador entiende.
+ *
+ * Se saltean los cues vacíos y los de duración cero: un cue mal formado hace
+ * que el navegador descarte el archivo entero, y perder todos los subtítulos
+ * por una escena rota sería peor que no tener esa escena.
+ */
+export function construirVtt(cues: readonly Cue[]): string {
+  const cuerpo = cues
+    .map((c) => ({ ...c, caption: c.caption.replace(/\s+/g, ' ').trim() }))
+    .filter((c) => c.caption.length > 0 && c.endSeconds > c.startSeconds)
+    .map(
+      (c, i) =>
+        `${i + 1}\n${tiempoVtt(c.startSeconds)} --> ${tiempoVtt(c.endSeconds)}\n${c.caption}`,
+    )
+    .join('\n\n')
+
+  return cuerpo ? `WEBVTT\n\n${cuerpo}\n` : 'WEBVTT\n'
 }
 
 /** Búsqueda dentro de la transcripción. Sin acentos ni mayúsculas de por medio. */

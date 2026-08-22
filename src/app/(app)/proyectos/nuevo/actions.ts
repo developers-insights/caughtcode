@@ -87,7 +87,24 @@ async function analyzeWorkspace(workspace: Workspace, stack: StackInfo) {
 async function rollbackProject(projectId: string): Promise<void> {
   try {
     const admin = createAdminClient()
-    await admin.rpc(F.deleteProjectCascade, { p_project_id: projectId })
+    const { data } = await admin.rpc(F.deleteProjectCascade, { p_project_id: projectId })
+
+    /*
+     * La función de base no borra archivos: devuelve las rutas para que las
+     * borre quien la llamó. Acá suele no haber ninguna —el rollback corre
+     * justamente cuando la subida falló— pero una subida a medias sí deja
+     * objetos, y sin esto quedaban huérfanos en el bucket sin ningún proyecto
+     * que los reclamara. Mismo criterio que `deleteProjectAction`: se prueba
+     * en los tres buckets porque la base no distingue de cuál viene cada ruta.
+     */
+    const storageObjects = (data as { storage_objects?: string[] } | null)?.storage_objects ?? []
+    if (storageObjects.length > 0) {
+      await Promise.allSettled(
+        [B.repos, B.recordings, B.videos].map((bucket) =>
+          admin.storage.from(bucket).remove(storageObjects),
+        ),
+      )
+    }
   } catch {
     /* mejor esfuerzo */
   }

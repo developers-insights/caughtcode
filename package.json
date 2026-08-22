@@ -9,14 +9,16 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint .",
+    "lint": "oxlint src tests scripts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "worker": "tsx --conditions=react-server --env-file-if-exists=.env.local scripts/worker.ts",
     "db:push": "supabase db push",
     "db:types:diff": "supabase gen types typescript --linked > /tmp/caughtcode-db-types.ts && diff -u src/lib/types/database.ts /tmp/caughtcode-db-types.ts || true",
-    "db:test": "psql \"$SUPABASE_DB_URL\" -f supabase/tests/rls.sql"
+    "db:test": "psql \"$SUPABASE_DB_URL\" -f supabase/tests/rls.sql",
+    "auditar": "tsx --conditions=react-server scripts/auditar-repo-real.ts",
+    "verificar": "tsx scripts/verificar-todo.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.116.0",
@@ -31,9 +33,9 @@
     "motion": "^13.0.0",
     "nanoid": "^6.0.1",
     "next": "^16.3.0",
-    "playwright": "^1.62.1",
     "p-limit": "^7.3.1",
     "pg": "^8.23.0",
+    "playwright": "^1.62.1",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "server-only": "^0.0.1",
@@ -46,26 +48,15 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@eslint/eslintrc": "^3.3.6",
     "@tailwindcss/postcss": "^4.3.3",
     "@types/node": "^26.2.0",
     "@types/pg": "^8.21.0",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
-    "eslint": "^10.8.1",
-    "eslint-config-next": "^16.3.0",
+    "oxlint": "1.79.0",
     "postcss": "^8.5.26",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.23.11",
     "vitest": "^4.1.10"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "esbuild",
-      "ffmpeg-static",
-      "unrs-resolver",
-      "sharp",
-      "@tailwindcss/oxide"
-    ]
   }
 }

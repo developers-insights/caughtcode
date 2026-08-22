@@ -168,8 +168,15 @@ export function DropdownItem({
   )
 }
 
+/**
+ * Raya entre grupos de acciones.
+ *
+ * `<hr>` y no un `div` con `role="separator"`: el rol ya viene puesto por el
+ * navegador, no hay que nombrarlo, y dentro de un `role="menu"` es hijo válido.
+ * Un `div` con rol tenía que fingir todo eso a mano.
+ */
 export function DropdownSeparator({ className }: { className?: string }) {
-  return <div role="separator" className={cn('my-1.5 h-px bg-line', className)} />
+  return <hr className={cn('my-1.5 h-px border-0 bg-line', className)} />
 }
 
 export function DropdownLabel({ className, children }: { className?: string; children: ReactNode }) {

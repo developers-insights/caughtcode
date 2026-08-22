@@ -299,6 +299,25 @@ export type JobKind =
   | 'scan_comments'
   | 'build_tutorials'
 
+/**
+ * Los trabajos que componen una revisión y que, por lo tanto, tiñen su estado:
+ * si uno se cae, la revisión no está completa.
+ *
+ * `scan_comments` y `build_tutorials` alimentan otras pantallas — que uno de
+ * esos falle no dice nada sobre la revisión y no puede teñirla.
+ *
+ * Fuente única: la usan `@/server/jobs/reconcile` (del lado del servidor) y
+ * `@/components/findings/view` (del lado de la pantalla). Antes vivía copiada
+ * en los dos, con el riesgo de que se separaran sin que nadie lo notara.
+ */
+export const TRABAJOS_DE_REVISION: readonly JobKind[] = [
+  'ingest_repo',
+  'index_code',
+  'run_checks',
+  'run_browser_agent',
+  'generate_video',
+]
+
 export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled'
 
 export interface JobRecord<TPayload = unknown> {

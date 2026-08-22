@@ -27,6 +27,7 @@
  */
 
 import type { JobKind, JobStatus, RunStatus } from '@/lib/types/domain'
+import { TRABAJOS_DE_REVISION } from '@/lib/types/domain'
 import { T } from '@/lib/db/tablas'
 import { describeDbError, jobsDb } from './db'
 import { describeError } from './errors'
@@ -38,17 +39,11 @@ import { markRunFinished } from './progress'
  * `scan_comments` y `build_tutorials` alimentan otras pantallas: que uno de
  * esos se caiga no dice nada sobre la revisión y no puede teñirla.
  *
- * Espejo de `TRABAJOS_DE_REVISION` en `src/components/findings/view.ts`, que
- * aplica el mismo criterio del lado de la pantalla. Las dos listas tienen que
- * decir lo mismo; el lugar natural para unificarlas es `@/lib/types/domain`.
+ * La lista vive en `@/lib/types/domain` — es la misma que usa la pantalla en
+ * `src/components/findings/view.ts`. Se re-exporta acá para no romper a quien
+ * ya la importaba desde este módulo.
  */
-export const TRABAJOS_DE_REVISION: readonly JobKind[] = [
-  'ingest_repo',
-  'index_code',
-  'run_checks',
-  'run_browser_agent',
-  'generate_video',
-]
+export { TRABAJOS_DE_REVISION }
 
 export function esTrabajoDeRevision(kind: JobKind): boolean {
   return TRABAJOS_DE_REVISION.includes(kind)

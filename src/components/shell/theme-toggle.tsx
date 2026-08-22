@@ -42,6 +42,13 @@ export function ThemeToggle({ className }: { className?: string }) {
   const [pref, setPref] = useState<ThemePreference>('system')
   const [ready, setReady] = useState(false)
 
+  /*
+   * `set-state-in-effect` marca esto, y acá la regla no aplica: `localStorage`
+   * no existe en el servidor, así que la preferencia guardada no se puede
+   * derivar durante el render ni usar como estado inicial sin romper la
+   * hidratación. Leerla después de montar es justamente el caso para el que
+   * existe `useEffect`: sincronizar con un sistema externo. Corre una sola vez.
+   */
   useEffect(() => {
     let stored: string | null = null
     try {
@@ -49,7 +56,9 @@ export function ThemeToggle({ className }: { className?: string }) {
     } catch {
       /* localStorage bloqueado: seguimos con 'system' */
     }
+    // oxlint-disable-next-line react/set-state-in-effect
     setPref(stored === 'light' || stored === 'dark' ? stored : 'system')
+    // oxlint-disable-next-line react/set-state-in-effect
     setReady(true)
   }, [])
 
