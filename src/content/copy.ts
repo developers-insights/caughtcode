@@ -245,8 +245,13 @@ export const ESTADOS = {
   },
   jobFallado: {
     titulo: 'La revisión se cortó por la mitad',
-    texto: 'Guardamos lo que alcanzamos a encontrar. Podés retomar desde donde quedó, sin volver a pagar.',
-    accion: 'Retomar',
+    // Decía "podés retomar desde donde quedó, sin volver a pagar", y no era
+    // cierto: volver a lanzarla arranca una corrida nueva y cuesta como tal.
+    // Prometer gratis algo que se cobra es exactamente lo que este producto le
+    // marca a las apps de los demás.
+    texto:
+      'Lo que alcanzamos a encontrar quedó guardado. Podés lanzarla de nuevo cuando quieras: antes de arrancar te decimos cuánto sale.',
+    accion: 'Volver a lanzarla',
   },
 }
 

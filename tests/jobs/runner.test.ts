@@ -103,7 +103,10 @@ describe('runClaimedJob', () => {
     const outcome = await runClaimedJob(job, { log: () => {} })
 
     expect(outcome.outcome).toBe('failed')
-    expect(outcome.error).toContain('handler no registrado todavía')
+    // Lo que queda escrito es lo que puede terminar en la pantalla: la etapa en
+    // castellano, sin jerga de la cola.
+    expect(outcome.error).toContain('Revisando tu proyecto')
+    expect(outcome.error).not.toMatch(/handler|stub|registrad/i)
     expect(db.row(T.jobs, 'job-1')!.status).toBe('failed')
   })
 

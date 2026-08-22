@@ -86,6 +86,13 @@ export function TabsList({
   }
 
   return (
+    // El `tablist` **no** se enfoca: el foco vive en las pestañas, con tabindex
+    // rotativo (`tabIndex={selected ? 0 : -1}` en `TabsTrigger`), que es lo que
+    // manda el patrón ARIA de pestañas. Hacer enfocable también al contenedor
+    // agregaría una parada de tabulación que no lleva a ningún lado. El
+    // `onKeyDown` está acá porque las flechas llegan burbujeando desde la
+    // pestaña enfocada, no porque el contenedor sea un control.
+    // oxlint-disable-next-line jsx-a11y/interactive-supports-focus
     <div
       ref={list}
       role="tablist"

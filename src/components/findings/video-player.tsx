@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react'
+import { useEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import {
   Captions,
   CaptionsOff,
@@ -15,7 +15,7 @@ import type { LucideIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Bezel, Callout, Spinner } from '@/components/ui'
 import { VIDEO } from './copy'
-import { cueActivo, cuesDelGuion, reloj, type Cue, type FindingVideo } from './view'
+import { construirVtt, cueActivo, cuesDelGuion, reloj, type Cue, type FindingVideo } from './view'
 
 export interface VideoPlayerProps {
   video: FindingVideo | null | undefined
@@ -53,6 +53,42 @@ export function VideoPlayer({ video, titulo, videoRef, onTiempo, className }: Vi
 
   const cues = useMemo(() => cuesDelGuion(video?.script), [video?.script])
   const cue: Cue | null = subtitulos ? cueActivo(cues, tiempo) : null
+
+  /* ── Pista de subtítulos ─────────────────────────────────────────────── */
+
+  /**
+   * Los subtítulos existen dos veces, a propósito y sin duplicarse en pantalla:
+   *
+   *  1. Como pista `<track>` de verdad, armada acá mismo con el guion que ya
+   *     viene en la fila del video. Es la que hace que el navegador, el lector
+   *     de pantalla y el reproductor nativo de iOS sepan que este video tiene
+   *     subtítulos. Sin ella, para todo lo que no sea nuestra capa de React,
+   *     este video no tenía ninguno.
+   *  2. Dibujados por nosotros abajo, para que se lean igual en tema claro y
+   *     oscuro. Por eso la pista va en modo `hidden` y no `showing`: activa y
+   *     anunciable, pero sin que el navegador la pinte encima de la nuestra.
+   *
+   * El `.vtt` que arma el servidor (`src/server/video/subtitles.ts`) es más
+   * fino —corta por frase, no por escena— pero hoy se escribe en el directorio
+   * de trabajo del render y no se sube a ningún lado: no hay URL que apuntar.
+   *
+   * Va como `data:` y no como `blob:` para que la etiqueta salga idéntica en el
+   * servidor y en el cliente: un blob solo existe después de hidratar, así que
+   * el `<track>` nacería sin `src` y habría que parcharlo en un render extra.
+   */
+  const pista = useMemo(
+    () => `data:text/vtt;charset=utf-8,${encodeURIComponent(construirVtt(cues))}`,
+    [cues],
+  )
+
+  // `video?.url` está en la lista porque es lo que decide si el `<video>` llegó
+  // a montarse: sin él, un clip que termina de renderizarse con el mismo guion
+  // que ya teníamos dejaba la pista en `disabled` para siempre.
+  useEffect(() => {
+    const track = ref.current?.textTracks?.[0]
+    if (!track) return
+    track.mode = subtitulos && cues.length > 0 ? 'hidden' : 'disabled'
+  }, [ref, subtitulos, cues.length, pista, video?.url])
 
   /* ── Eventos del elemento ────────────────────────────────────────────── */
 
@@ -99,52 +135,98 @@ export function VideoPlayer({ video, titulo, videoRef, onTiempo, className }: Vi
 
   /* ── Acciones ────────────────────────────────────────────────────────── */
 
-  const alternar = useCallback(() => {
+  /*
+   * Sin `useCallback`. `ref` acá no es un `useRef` directo sino `videoRef ??
+   * propio`, así que el compilador de React no lo reconoce como ref: infiere
+   * `ref.current` como dependencia, no coincide con la declarada, y ante esa
+   * discrepancia deja de optimizar **todo** el componente. Estas funciones solo
+   * viajan como `onClick`/`onKeyDown`, nunca como dependencia de un efecto: no
+   * necesitan identidad estable, y soltarlas le devuelve al compilador el
+   * trabajo de memorizarlas, que lo hace mejor que nosotros a mano.
+   */
+  const alternar = () => {
     const el = ref.current
     if (!el) return
     if (el.paused) void el.play()
     else el.pause()
-  }, [ref])
+  }
 
-  const saltar = useCallback(
-    (delta: number) => {
-      const el = ref.current
-      if (!el) return
-      el.currentTime = Math.min(Math.max(0, el.currentTime + delta), el.duration || 0)
-    },
-    [ref],
-  )
+  const saltar = (delta: number) => {
+    const el = ref.current
+    if (!el) return
+    el.currentTime = Math.min(Math.max(0, el.currentTime + delta), el.duration || 0)
+  }
 
-  const pantallaCompleta = useCallback(() => {
-    if (document.fullscreenElement) void document.exitFullscreen()
-    else void contenedor.current?.requestFullscreen?.()
-  }, [])
+  /**
+   * Pantalla completa, con la vuelta que hace falta para iPhone.
+   *
+   * iOS Safari **no implementa la API de pantalla completa sobre un elemento
+   * cualquiera**: `requestFullscreen` no existe sobre un `<div>`. Lo único que
+   * soporta es `webkitEnterFullscreen()` sobre el propio `<video>`, que abre el
+   * reproductor nativo del sistema. Sin este camino alternativo, el botón de
+   * pantalla completa en iPhone no hacía absolutamente nada.
+   *
+   * Que en iOS se abra el reproductor nativo y no el nuestro es la única opción
+   * disponible, y ahí el `<track>` de subtítulos que ahora emitimos pasa a
+   * importar más todavía: es lo único que ese reproductor sabe mostrar de lo
+   * nuestro.
+   */
+  const pantallaCompleta = () => {
+    if (document.fullscreenElement) {
+      void document.exitFullscreen()
+      return
+    }
 
-  const alTeclado = useCallback(
-    (e: React.KeyboardEvent<HTMLDivElement>) => {
-      // No secuestramos el teclado cuando el foco está en un control propio.
-      if ((e.target as HTMLElement).closest('button, input, a')) return
+    const caja = contenedor.current
+    if (caja?.requestFullscreen) {
+      void caja.requestFullscreen()
+      return
+    }
 
-      const acciones: Record<string, () => void> = {
-        ' ': alternar,
-        k: alternar,
-        ArrowLeft: () => saltar(-10),
-        ArrowRight: () => saltar(10),
-        m: () => {
-          if (ref.current) ref.current.muted = !ref.current.muted
-        },
-        c: () => setSubtitulos((v) => !v),
-        f: pantallaCompleta,
-      }
+    const nativo = ref.current as (HTMLVideoElement & { webkitEnterFullscreen?: () => void }) | null
+    nativo?.webkitEnterFullscreen?.()
+  }
 
-      const accion = acciones[e.key] ?? acciones[e.key.toLowerCase()]
-      if (accion) {
-        e.preventDefault()
-        accion()
-      }
-    },
-    [alternar, saltar, pantallaCompleta, ref],
-  )
+  const alTeclado = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    /*
+     * Antes esto cortaba ante cualquier control propio, y el resultado era que
+     * los atajos morían apenas tocabas un botón: el foco se queda en el botón
+     * que clickeaste, así que a partir de ahí ni `f`, ni `m`, ni las flechas
+     * hacían nada. Justo después de darle play —lo primero que hace cualquiera—
+     * el teclado quedaba mudo.
+     *
+     * Lo que hay que respetar no es "el foco está en un control", sino las dos
+     * teclas con las que el navegador activa ese control. Espacio y Enter sobre
+     * un botón le pertenecen al botón; el resto puede pasar sin ambigüedad.
+     *
+     * Nota de alcance: el contenedor sigue con `tabIndex={-1}`, así que recibe
+     * foco al hacer click pero no por tabulación. Quien navegue solo con
+     * teclado llega a los botones (que funcionan con Enter y Espacio) pero no
+     * a los atajos. Hacerlo tabulable agregaría una parada más en el recorrido
+     * y no se puede evaluar bien sin un video renderizado a la vista —hoy no
+     * hay ninguno—, así que se deja anotado en vez de decidirlo a ciegas.
+     */
+    const enControl = (e.target as HTMLElement).closest('button, input, a')
+    if (enControl && (e.key === ' ' || e.key === 'Enter')) return
+
+    const acciones: Record<string, () => void> = {
+      ' ': alternar,
+      k: alternar,
+      ArrowLeft: () => saltar(-10),
+      ArrowRight: () => saltar(10),
+      m: () => {
+        if (ref.current) ref.current.muted = !ref.current.muted
+      },
+      c: () => setSubtitulos((v) => !v),
+      f: pantallaCompleta,
+    }
+
+    const accion = acciones[e.key] ?? acciones[e.key.toLowerCase()]
+    if (accion) {
+      e.preventDefault()
+      accion()
+    }
+  }
 
   /* ── Estados en los que todavía no hay video ─────────────────────────── */
 
@@ -157,6 +239,10 @@ export function VideoPlayer({ video, titulo, videoRef, onTiempo, className }: Vi
     return (
       <Bezel className={className}>
         <div
+          // `<output>` solo admite contenido de frase y acá adentro van un
+          // spinner y dos párrafos: sería HTML inválido. Y nombra el resultado
+          // de un cálculo de formulario, que no es lo que pasa acá.
+          // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role
           role="status"
           className="flex aspect-video w-full flex-col items-center justify-center gap-4 px-6 text-center"
         >
@@ -176,7 +262,18 @@ export function VideoPlayer({ video, titulo, videoRef, onTiempo, className }: Vi
 
   return (
     <Bezel className={className}>
-      <div ref={contenedor} onKeyDown={alTeclado} tabIndex={-1} className="w-full">
+      {/* Punto de delegación de los atajos de teclado, no un control. Todo lo
+          que se opera de verdad —los botones y la barra de avance— son
+          elementos interactivos propios, enfocables y con nombre. Este `div` no
+          es destino de tabulación (`tabIndex={-1}`) y no hay rol que lo
+          describa: ponerle uno interactivo anunciaría un control inexistente. */}
+      {/* oxlint-disable-next-line jsx-a11y/no-static-element-interactions */}
+      <div
+        ref={contenedor}
+        onKeyDown={alTeclado}
+        tabIndex={-1}
+        className="w-full"
+      >
         <div className="relative isolate">
           <video
             ref={ref}
@@ -188,6 +285,10 @@ export function VideoPlayer({ video, titulo, videoRef, onTiempo, className }: Vi
             onClick={alternar}
             className="block aspect-video w-full cursor-pointer bg-canvas-sunken object-contain"
           >
+            {/* Subtítulos como pista real. Ver la nota larga más arriba: el
+                navegador la necesita para saber que existen; nosotros igual los
+                dibujamos abajo, y por eso la pista va en modo `hidden`. */}
+            <track kind="captions" srcLang="es" label={VIDEO.subtitulos} src={pista} />
             {VIDEO.noSoportado}
           </video>
 

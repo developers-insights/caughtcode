@@ -24,10 +24,17 @@ const PRESETS: Record<ErrorKind, { icon: ReactNode; title: string; description: 
     title: 'No encontramos esto',
     description: 'Puede que lo hayan borrado, o que el link esté mal copiado.',
   },
+  /*
+   * No promete retomar desde donde quedó: verificado en `asegurarCorrida()`
+   * (`src/server/ingest/handlers.ts`), volver a lanzarla arranca una corrida
+   * nueva y se cobra completa. El texto viejo decía lo contrario, y prometer
+   * gratis algo que se cobra es la peor forma de perder la confianza.
+   */
   'job-failed': {
     icon: <Unplug strokeWidth={1.7} />,
     title: 'El análisis se cortó a mitad de camino',
-    description: 'Lo que ya se revisó quedó guardado. Podés retomarlo desde donde quedó.',
+    description:
+      'Lo que alcanzamos a revisar quedó guardado. Podés lanzarla de nuevo cuando quieras: antes de arrancar te decimos cuánto sale.',
   },
   offline: {
     icon: <Ban strokeWidth={1.7} />,

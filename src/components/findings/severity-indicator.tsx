@@ -70,24 +70,30 @@ export function SeverityIndicator({
         </span>
       )}
 
+      {/* El disparador del tooltip es un `<button>`, no un `<span tabIndex={0}>`.
+          Un span con tabindex se puede enfocar con Tab pero en iOS no se enfoca
+          al tocarlo: el tooltip abre con `onFocusCapture`, así que en celular la
+          aclaración no aparecía nunca. Con un botón real aparece, y además queda
+          el par que pide el patrón ARIA de tooltip: control enfocable +
+          `aria-describedby` (lo pone `<Tooltip>` al abrir). */}
       {dudoso ? (
         <Tooltip content={DISCLAIMER_CONFIANZA_MEDIA}>
-          <span
-            tabIndex={0}
+          <button
+            type="button"
             className="rounded-xs text-xs text-ink-muted underline decoration-line-strong decoration-dotted underline-offset-4 focus-visible:focus-ring"
           >
             {CONFIDENCE_HINT.to_review}
-          </span>
+          </button>
         </Tooltip>
       ) : (
         variante === 'suave' && (
           <Tooltip content={CONFIDENCE_HINT[confidence]}>
-            <span
-              tabIndex={0}
+            <button
+              type="button"
               className="rounded-xs text-xs text-ink-subtle underline decoration-line decoration-dotted underline-offset-4 focus-visible:focus-ring"
             >
               {CONFIDENCE_LABEL[confidence]}
-            </span>
+            </button>
           </Tooltip>
         )
       )}

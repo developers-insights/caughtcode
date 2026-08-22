@@ -72,3 +72,61 @@ completo (`scripts/probar-repo-publico.ts`).
 - Sesión de diseño. Sin código todavía, así que no hay gotchas de implementación aún.
 - Aprendizaje de método: las 7 investigaciones en paralelo costaron ~$35 pero **cambiaron el producto entero** — la idea original competía con alternativas gratis y atacaba un dolor secundario. Barato comparado con construir lo equivocado.
 - El gate `gateguard-fact-force` pide justificar cada archivo nuevo antes de crearlo. Se desactiva con `ECC_GATEGUARD=off`.
+
+### 2026-08-22 — Railway, linter y la primera auditoría E2E real
+
+**El `Dockerfile` construye. Ya no es una incógnita.** Nunca se había corrido (no hay Docker en la
+máquina de desarrollo) y era el riesgo abierto más grande del deploy. Primera construcción real en
+Railway: imagen de 1.13 GB sobre `mcr.microsoft.com/playwright:v1.62.1-noble`,
+`pnpm install --frozen-lockfile` sin tocar el lockfile, `/data/caughtcode-storage` creado con dueño
+`pwuser`. Salió sin un solo ajuste.
+
+**El conector de Supabase `supabase-comunidad-latina` NO llega a la base de caughtcode.** Apunta a
+`vnfqzlcxpmofvsoxnptf` ("Comunidad Latina", inactivo), que es un proyecto **distinto y homónimo**.
+El nuestro es `ktmbtpuhqqofdkisqseq`, que en el panel se llama "Comunidad latina y caughtcode". El
+que sí llega es `supabase-cuenta-dev` (es un PAT con alcance de cuenta), pasándole
+`project_id: "ktmbtpuhqqofdkisqseq"` en cada llamada. Perder tiempo con el conector equivocado es
+fácil: los dos proyectos se llaman casi igual.
+
+**`typescript-eslint` no soporta TypeScript 7, y no hay versión que sí.** Verificado contra el
+registro: ni la última estable (8.67.0) ni las alpha. Todas piden `typescript >=4.8.4 <6.1.0`. Y no
+alcanza con sacar `next/typescript` del config: `eslint-config-next` importa `typescript-eslint`
+desde su propio `index.js`, así que ni `core-web-vitals` carga. El side-by-side con TS 6 que
+recomienda el equipo de TypeScript **tampoco aplica acá**, porque el `.npmrc` fija
+`node-linker=hoisted` y con el árbol aplanado no puede haber dos versiones de `typescript`
+(probado con `pnpm.overrides`: el parser siguió resolviendo la 7.0.2). Se pasó a **oxlint** (ver
+D21).
+
+**Un linter que no corre cuesta plata.** Apenas `pnpm lint` volvió a funcionar aparecieron **27
+errores** de accesibilidad y de React que llevaban meses invisibles, en un producto cuyo trabajo es
+encontrarle esos mismos problemas a las apps de otros.
+
+**Ojo con los falsos positivos de a11y sobre componentes propios.** `control-has-associated-label`
+marcaba tres botones del wizard que **sí** tienen texto — pero adentro de `<Card>`/`<CardBody>`, que
+el linter no puede analizar. No era un bug real. Se resolvió con `aria-label` explícito, que además
+mejora lo que anuncia el lector de pantalla. Antes de "arreglar" un hallazgo de a11y sobre un
+componente compuesto, mirar si el linter simplemente no puede ver adentro.
+
+**Lo que sí era un bug real:** `source-drop-zone.tsx` tenía el `<input type="file">` **dentro** de un
+`<div role="button">`. Es HTML inválido (un control interactivo no puede vivir dentro de un botón).
+Ahora es un `<button>` de verdad con el input como hermano — y se fueron el `tabIndex` y el
+`onKeyDown` a mano, que el navegador ya hace solo.
+
+**El pipeline produce hallazgos reales sobre repos reales.** `scripts/auditar-repo-real.ts`
+(`pnpm auditar [url]`) encadena ingesta → índice → chequeos sin base de datos ni cola, y sin
+`ANTHROPIC_API_KEY` (`usarModelo: false`, determinístico). Probado contra tres repos públicos, con
+hallazgos verificables en cada uno — entre ellos `/api/seed` sin autenticación en la plantilla
+oficial de Next.js de Vercel, y la tabla `users` sin RLS más dos `.env.local.ci` versionados en el
+monorepo de `supabase-js`. Las tres reglas duras (evidencia siempre, máximo 3 destacados, cero
+marcadores `{{}}` sin completar) se verifican en cada corrida.
+
+**`process.exit()` en un script que usó tree-sitter revienta en Windows.** Deja handles de libuv
+abiertos y cerrarlos a la fuerza termina en `Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)`
+después de la última línea — parece que el script falló cuando terminó bien. Usar `process.exitCode`.
+
+**Las 10 funciones `SECURITY DEFINER` expuestas a `authenticated` están bien.** Auditadas con
+explotación real (JWT de un tercero contra datos de otra organización, todo dentro de
+`begin; … rollback;`), con controles negativos para descartar un falso verde y una prueba de
+mutación que confirma que el test detecta el agujero si se lo introduce. Red de contención nueva:
+`supabase/tests/rpc_autorizacion.sql`. Los WARN de `get_advisors` sobre estas funciones son
+**esperados**: son para que las llame el navegador, y validan al llamante por dentro.

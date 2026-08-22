@@ -77,7 +77,15 @@ export function TranscriptPanel({
             </div>
 
             {visibles.length === 0 ? (
-              <p role="status" className="py-2 text-base text-ink-muted">
+              <p
+                // `role="status"` es la región viva canónica de ARIA: el aviso
+                // aparece solo, al filtrar, y hay que anunciarlo sin robar el
+                // foco. `<output>` nombra el resultado de un cálculo de
+                // formulario, que no es lo que pasa acá.
+                // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role
+                role="status"
+                className="py-2 text-base text-ink-muted"
+              >
                 {TRANSCRIPCION.sinResultados}
               </p>
             ) : (

@@ -2,7 +2,9 @@ import type { ReactNode } from 'react'
 import { cn } from '@/lib/utils'
 import { Card, CardBody, Progress } from '@/components/ui'
 import { ESTADOS } from '@/content/copy'
+import type { ErrorLegible } from '@/content/lenguaje'
 import { CORTE, LISTA, PROGRESO } from './copy'
+import { TechnicalDetail } from './technical-detail'
 import type { RunView } from './view'
 
 export interface RunProgressProps {
@@ -40,7 +42,15 @@ export function RunProgress({ run, encontrados, desconectado = false, className 
         />
 
         {desconectado && (
-          <p role="status" className="text-sm text-incompleto-text">
+          <p
+            // `role="status"` es la región viva canónica de ARIA para un aviso
+            // que aparece solo. `<output>` nombra el resultado de un cálculo de
+            // formulario —otra cosa— y es el idioma que usa toda la pantalla
+            // para lo mismo: cambiarlo acá solo rompería la consistencia.
+            // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role
+            role="status"
+            className="text-sm text-incompleto-text"
+          >
             {PROGRESO.cortado}
           </p>
         )}
@@ -87,7 +97,14 @@ export function RunStalledNotice({ hayHallazgos, action, className }: RunStalled
   return (
     <Card tone="incompleto" emphasis="marked" className={className}>
       <CardBody className="space-y-4 pt-5 sm:pt-6">
-        <div role="status" className="space-y-1">
+        <div
+          // Acá `<output>` sería HTML inválido: solo admite contenido de frase
+          // y adentro va un `<h2>`. `role="status"` es además el idioma de
+          // región viva que usa toda la pantalla.
+          // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role
+          role="status"
+          className="space-y-1"
+        >
           <h2 className="text-base font-medium text-ink">{CORTE.titulo}</h2>
           <p className="max-w-prose text-base leading-relaxed text-ink-muted">
             {hayHallazgos ? CORTE.textoConHallazgos : CORTE.texto}
@@ -101,14 +118,16 @@ export function RunStalledNotice({ hayHallazgos, action, className }: RunStalled
 
 export interface RunFailedNoticeProps {
   /**
-   * Lo que reportó el motor al cortarse, tal cual.
+   * Por qué se cortó, **ya traducido** (ver `traducirErrorTecnico`).
    *
-   * Va **a la vista** y no plegado detrás de un "detalle técnico": suele ser lo
-   * único que le dice al usuario qué tiene que arreglar de su lado para que la
-   * próxima corrida llegue hasta el final.
+   * `motivo.mensaje` va a la vista: suele ser lo único que le dice al usuario
+   * qué tiene que arreglar de su lado para que la próxima corrida llegue hasta
+   * el final. `motivo.detalle` —el texto crudo del motor— va plegado: no se
+   * pierde, pero tampoco es lo primero que se lee. Antes acá se imprimía el
+   * crudo, y podía ser un error de Postgres en inglés.
    */
-  motivo?: string | null
-  /** Retomar desde donde quedó. Sin volver a cobrar. */
+  motivo?: ErrorLegible | null
+  /** Volver a lanzar la revisión. Cuesta como una nueva, y se avisa antes. */
   action?: ReactNode
   className?: string
 }
@@ -131,9 +150,12 @@ export function RunFailedNotice({ motivo, action, className }: RunFailedNoticePr
           </p>
         </div>
         {motivo && (
-          <p className="max-w-prose rounded-md border border-incompleto-border bg-incompleto-soft px-4 py-3 text-base leading-relaxed text-incompleto-text">
-            {motivo}
-          </p>
+          <div className="max-w-prose space-y-3">
+            <p className="rounded-md border border-incompleto-border bg-incompleto-soft px-4 py-3 text-base leading-relaxed text-incompleto-text">
+              {motivo.mensaje}
+            </p>
+            <TechnicalDetail detalle={motivo.detalle} />
+          </div>
         )}
         {action}
       </CardBody>

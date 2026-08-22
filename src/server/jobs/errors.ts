@@ -23,14 +23,51 @@ export class JobError extends Error {
   }
 }
 
-/** El frente dueño de este tipo de trabajo todavía no publicó su handler. */
+export interface HandlerNotRegisteredOptions {
+  /** Cómo se llama esa etapa en castellano (`JOB_KIND_LABEL`). */
+  etapa?: string
+  /**
+   * `true` cuando la capacidad está **declarada y todavía no construida** (no
+   * existe el motor), y no cuando simplemente no se pudo cargar su módulo en
+   * este proceso. Son dos cosas distintas y no se pueden contar igual: decirle
+   * "todavía no lo construimos" a alguien cuyo video sí existe pero no cargó
+   * sería mentirle.
+   */
+  sinMotor?: boolean
+}
+
+/**
+ * Nadie puede ejecutar este tipo de trabajo en este proceso.
+ *
+ * Pasa por dos motivos muy distintos:
+ *
+ *   - la capacidad está declarada pero **no construida** (`sinMotor`), o
+ *   - el módulo que la trae **no cargó acá** (el caso real: Playwright no viaja
+ *     en la función serverless de Vercel).
+ *
+ * El mensaje termina en `jobs.last_error` y de ahí puede llegar a la pantalla,
+ * así que va sin jerga: nada de "handler", "stub" ni el nombre interno del tipo
+ * de trabajo. Para los logs y para filtrar está `kind`, que no se muestra.
+ */
 export class HandlerNotRegisteredError extends JobError {
-  constructor(kind: string) {
+  /** El `JobKind` que no se pudo ejecutar. Para logs, no para pantalla. */
+  readonly kind: string
+
+  constructor(kind: string, options: HandlerNotRegisteredOptions = {}) {
+    const etapa = options.etapa?.trim() || 'Una parte de la revisión'
     super(
-      `El trabajo "${kind}" todavía no tiene quién lo ejecute (handler no registrado todavía).`,
-      { retryable: false, code: 'handler_no_registrado' },
+      options.sinMotor
+        ? `«${etapa}» es algo que todavía no sabemos hacer: la función está anunciada pero ` +
+            'no construida, así que no la hicimos. El resto de tu revisión no se ve afectado.'
+        : `«${etapa}» no estuvo disponible y no llegamos a hacerla. Lo que sí alcanzamos a ` +
+            'revisar sigue valiendo, y podés volver a pedir la revisión para intentarlo de nuevo.',
+      {
+        retryable: false,
+        code: options.sinMotor ? 'capacidad_no_construida' : 'handler_no_registrado',
+      },
     )
     this.name = 'HandlerNotRegisteredError'
+    this.kind = kind
   }
 }
 

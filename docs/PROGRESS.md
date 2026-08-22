@@ -7,9 +7,162 @@
 
 ## 📍 Dónde estamos ahora
 
-**Fase:** Construcción. Motores, base de datos, diseño y pantallas principales cerrados. **La cola quedó enchufada**: 5 de 7 tipos de trabajo tienen handler real.
-**Falta para la primera auditoría real:** que alguien se registre en la app y cargue un proyecto (ver "Qué falta para la prueba real").
-**Última sesión:** 2026-08-12.
+**Fase:** Construcción cerrada. Motores, base, diseño, pantallas y cola terminados. 6 de 7 tipos de trabajo tienen handler real (`build_tutorials` es una capacidad **declarada y no construida** a propósito — ver más abajo).
+**Falta una sola cosa para que el sistema funcione de punta a punta en producción:** cargar **tres secretos** en Railway. Nada más. Ver la sección de acá abajo.
+**Última sesión:** 2026-08-22.
+
+---
+
+## ⚡ 2026-08-22 — El worker vive en Railway y el pipeline quedó probado contra repos reales
+
+### Lo único que falta: tres secretos
+
+El worker está creado, construido y esperando. Está **CRASHED** y va a seguir así hasta que se carguen
+estas variables en **Railway → proyecto `caughtcode` → servicio `caughtcode-worker` → Variables**
+(pegar en el RAW Editor y hacer click en **Deploy** en el banner violeta):
+
+| Variable | Bloquea | De dónde sale |
+|---|---|---|
+| `SUPABASE_SERVICE_ROLE_KEY` | **El arranque.** Es la causa exacta del CRASHED | Panel de Supabase → proyecto `ktmbtpuhqqofdkisqseq` → Settings → API → `service_role` |
+| `ANTHROPIC_API_KEY` | Agente navegador, guion de video, resumen del análisis | console.anthropic.com → API Keys. Puede ser la misma de Vercel |
+| `ENCRYPTION_KEY` | Descifrar credenciales guardadas | **Tiene que ser idéntica a la de Vercel.** Sacarla de ahí, no generar una nueva: con otra clave el worker no puede descifrar lo que cifró la app |
+| `AZURE_SPEECH_KEY` + `AZURE_SPEECH_REGION` *(opcional)* | Narración de los videos | Sin ellas el video sale mudo, solo con subtítulos |
+| `GITHUB_APP_*` *(opcional)* | Repos **privados** | Los públicos ya andan pegando la dirección |
+
+Las otras **12 ya están cargadas**. Guía completa: `docs/DEPLOY-RAILWAY.md`.
+
+### Railway: creado y verificado
+
+| Qué | Valor |
+|---|---|
+| Proyecto | `caughtcode` · `06a7f9c6-9e8e-4eab-afd5-d32703e9f497` |
+| Servicio | `caughtcode-worker` · `acf08c23-dd4e-421a-9658-c34dfc521931` |
+| Entorno | `production` · `0cc83e06-23a9-4443-9920-3b7ab1939ab1` |
+| Fuente | `developers-insights/caughtcode`, rama `main`, autodeploy en cada push |
+| Config | `ON_FAILURE` con 10 reintentos · sin sleep · sin dominio (no sirve HTTP) · `WORKER_CONCURRENCY=1` |
+
+**El `Dockerfile` construye.** Era el riesgo abierto más grande —nunca se había corrido, no hay Docker
+en la máquina de desarrollo— y salió sin un solo ajuste: imagen de 1.13 GB sobre
+`mcr.microsoft.com/playwright:v1.62.1-noble`, `pnpm install --frozen-lockfile` sin tocar el lockfile,
+`/data/caughtcode-storage` con dueño `pwuser`. **El punto 2 de "Lo que sigue" del 2026-08-12 queda cerrado.**
+
+Decisión registrada en `DECISIONS.md` como **D20**.
+
+### El pipeline produce hallazgos reales sobre repos reales
+
+Nuevo: `pnpm auditar [url]` (`scripts/auditar-repo-real.ts`). Encadena ingesta → índice → chequeos
+sobre un repo público, sin base de datos, sin cola y **sin `ANTHROPIC_API_KEY`** (`usarModelo: false`,
+determinístico). Verifica además las tres reglas duras en cada corrida.
+
+Probado contra cuatro repos, con hallazgos verificables en todos:
+
+| Repo | Resultado |
+|---|---|
+| `vercel/nextjs-postgres-nextauth-tailwindcss-template` | 41 archivos · **`/api/seed` sin autenticación** (`app/api/seed/route.ts:5`), estado vacío sin contemplar, campos sin nombre |
+| `supabase/supabase-js` | **tabla `users` sin RLS** en 17 lugares · dos `.env.local.ci` versionados |
+| `steven-tey/precedent` | pantalla vacía sin estado, carga en blanco, sin pantalla de 404 |
+| `calcom/cal.com` | **6509 archivos · índice en 5,3 s · chequeos en 4,9 s** — el riesgo de "los repos grandes rompen el procesamiento" no se materializó |
+
+### Seguridad: las 10 RPC expuestas están bien, y ahora hay red que lo prueba
+
+`get_advisors` marca 10 funciones `SECURITY DEFINER` invocables por `authenticated`. Se auditaron las
+diez **con explotación real** (JWT de un tercero contra datos de otra organización, todo dentro de
+`begin; … rollback;`): las diez validan al llamante. `delete_account` exige ser el dueño,
+`delete_project_cascade` exige admin —no alcanza con ser miembro—, los cuatro `org_of_*` devuelven
+`NULL` a un ajeno. **Cero migraciones necesarias.**
+
+Lo que hace que esto no sea un falso verde: controles negativos (el dueño legítimo sí puede) y una
+**prueba de mutación** —se reemplazó `org_of_project` por la versión sin chequeo y el test lo detectó—.
+Red nueva: `supabase/tests/rpc_autorizacion.sql`. `anon` sigue en 0 funciones.
+
+Verificado aparte: los llamantes de las dos funciones de borrado **sí** eliminan los objetos de Storage
+que la función devuelve. El rollback de onboarding los ignoraba y quedaba basura en el bucket — corregido.
+
+### `pnpm lint` volvió a correr después de meses, y costó caro haberlo perdido
+
+No era cuestión de actualizar: **ninguna versión publicada de `typescript-eslint` soporta TypeScript 7**,
+y el side-by-side con TS 6 que recomienda el equipo de TypeScript tampoco aplica acá (`node-linker=hoisted`
+impide dos versiones de `typescript` en el árbol). Se migró a **oxlint** (D21) y ESLint salió del proyecto.
+
+Al volver a correr aparecieron **27 errores** que llevaban meses invisibles, en un producto cuyo trabajo
+es encontrarle esos mismos problemas a las apps ajenas. Uno era un bug real: `source-drop-zone.tsx` tenía
+un `<input type="file">` **dentro** de un `<div role="button">` (HTML inválido). Ahora es un `<button>`
+de verdad con el input como hermano.
+
+### Deuda del 2026-08-12, cerrada
+
+| Pendiente | Estado |
+|---|---|
+| Falta el cartel de precio antes de re-analizar (regla dura #3) | **Cerrado.** El precio se calcula en el servidor (`estimarRevisionAction`) y baja resuelto; `pricing.ts` nunca viaja al cliente. Si la estimación falla, **no se encola igual**: se bloquea y se pide reintentar |
+| "Volver a revisar" era un botón muerto | **Cerrado.** Ahora dispara la revisión con su cartel de precio, y aparece solo cuando tiene sentido |
+| `TRABAJOS_DE_REVISION` duplicado en dos archivos | **Cerrado.** Fuente única en `@/lib/types/domain` |
+| `last_error` mostraba jerga cruda de Postgres | **Cerrado.** `EstadoDeRevision.fallada.motivo` pasó de `string` a `ErrorLegible { mensaje, detalle }` — el cambio de tipo hace que mostrar el crudo sea un acto deliberado. 8 familias de error traducidas; lo que no se reconoce se admite y el crudo queda plegado |
+| El código de las corridas se acumulaba sin borrarse | **Cerrado, y el agujero era más grande de lo que decía este documento.** El borrado por corrida ya existía en `reconcileRunStatus()`, pero **corre en el proceso que cierra la corrida, que no siempre es el que bajó el código**: el worker de Railway baja a `/data` y el tick de Vercel puede cerrar la corrida desde otra máquina — ese `rm` iba al disco equivocado. Nuevo `barrerCodigoHuerfano()` (`src/server/jobs/limpieza.ts`), enganchado en el `finally` de `runClaimedJob()`: cada proceso barre su propio disco. Solo borra si pasa las tres: nadie la tocó hace 6 h, la corrida no está `running`, y ningún trabajo suyo está pendiente. **Si la base no contesta, no borra nada** |
+| Corridas colgadas `7713e31f` y `4f81ed96` | **Ya no existen.** Verificado en la base: 0 trabajos `queued`/`running` |
+| Deployar a Vercel | **Hecho.** El merge a `main` lo disparó; la app responde y redirige a `/entrar` |
+
+### `build_tutorials`: capacidad declarada, no construida — a propósito
+
+No se inventó la feature (no hay especificación, y el repo exige `brainstorming` antes). Lo que se hizo
+es que **degrade de forma honesta**: `CAPACIDADES_SIN_MOTOR` en `src/server/jobs/registry.ts` lo declara
+explícitamente, y `HandlerNotRegisteredError` ahora distingue dos casos que antes se confundían —
+capacidad sin motor vs. módulo que no cargó en este proceso (el caso real de Playwright en Vercel).
+Decirle "todavía no lo construimos" a alguien cuyo video sí existe pero no cargó sería mentirle.
+Hay un test que **escanea `src/` entero** y falla el día que alguien lo encole sin registrar handler.
+
+### Accesibilidad: los 27 errores, y lo que había abajo
+
+Cerrados los 27. Pero lo valioso no fueron los errores sino lo que destaparon:
+
+- **Un tooltip que nunca aparecía en celular.** `severity-indicator.tsx` usaba `<span tabIndex={0}>`
+  y `<Tooltip>` abre con `onFocusCapture`: en iOS un span con `tabindex` no se enfoca al tocarlo, así
+  que la aclaración de confianza del hallazgo **no se veía nunca**. Ahora es un `<button>` real.
+- **React había dejado de optimizar el reproductor entero.** Tres `useCallback` en `video-player.tsx`
+  cuya dependencia era `videoRef ?? propio` — el compilador no lo reconoce como ref, infiere
+  `ref.current`, y ante la discrepancia abandona la optimización del componente completo.
+- **Un diálogo que se cerraba mostrando el texto de confirmación** durante un pintado
+  (`confirm-dialog.tsx`), y el tablero de hallazgos pintando una vez con la lista vieja después de
+  `router.refresh()`. Los dos por ajustar estado en un efecto en vez de durante el render.
+- **`<input type="file">` dentro de un `<div role="button">`** en `source-drop-zone.tsx` — HTML
+  inválido. Ahora es un `<button>` real con el input como hermano.
+
+**Subtítulos del video — resuelto a medias, y conviene saber por qué.** El `<video>` no tenía
+`<track>`: los subtítulos se pintaban como un `<p>` propio encima. Quien mira la pantalla los veía,
+pero para el navegador, el lector de pantalla y el reproductor nativo de iPhone **ese video no tenía
+subtítulos**. Ahora emite un `<track kind="captions">` real construido de `video.script`.
+
+Lo incómodo que apareció mirando: **el servidor ya genera un `.vtt` mejor y lo tira**.
+`src/server/video/subtitles.ts` corta por frase con tiempos medidos del audio real de TTS, e
+`index.ts:363` lo escribe como `subtitulos.vtt` — pero `vttPath` no se usa en ningún otro lado: se
+queda en el directorio de trabajo del render y nunca se sube a Storage. Los cues que emite el cliente
+son por escena y con tiempos estimados: es lo mismo que ya se mostraba en pantalla, no una regresión,
+pero tampoco es lo mejor que el sistema sabe producir.
+
+**No se conectó, a propósito.** Requiere subir el artefacto a Storage y agregar una columna a
+`videos_caughtcode` (migración en la base compartida con el otro producto), y hoy **el beneficio es
+cero: no existe ningún video renderizado**. Es el próximo paso natural del frente de video, con el
+camino ya identificado.
+
+**Dos bugs del reproductor arreglados en el paso siguiente:** el botón de pantalla completa no hacía
+nada en iPhone (`requestFullscreen` no existe sobre un `<div>` en iOS Safari; ahora cae a
+`webkitEnterFullscreen()` sobre el `<video>`), y los atajos de teclado morían apenas tocabas un botón
+—el foco se quedaba ahí y el guard cortaba todo—, así que justo después de darle play el teclado
+quedaba mudo. Ahora solo se le ceden al botón Espacio y Enter, que son las teclas que le pertenecen.
+
+**Queda anotado, no resuelto:** el contenedor del reproductor sigue con `tabIndex={-1}`, así que quien
+navegue solo con teclado llega a los botones pero no a los atajos. Hacerlo tabulable agrega una parada
+al recorrido y no se puede evaluar bien sin un video a la vista.
+
+### Estado verificado (2026-08-22)
+
+| Qué | Estado |
+|---|---|
+| `pnpm typecheck` | limpio |
+| `pnpm test` | **1007 tests, 70 archivos** (eran 942) |
+| `pnpm build` | compila |
+| `pnpm lint` | **0 errores** — corre por primera vez en meses |
+| `docker build` | **construye** (primera vez, en Railway) |
+| Base de datos | 1 org · 4 proyectos · 204 hallazgos · 6 corridas · **0 trabajos pendientes** · 0 videos |
 
 ---
 

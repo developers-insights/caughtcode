@@ -16,8 +16,9 @@
  *    `MODULO_POR_KIND`, acá abajo. Son las dos únicas ediciones que necesitás en
  *    esta carpeta, y el `Record<JobKind, …>` no te deja olvidarte de la segunda.
  *
- * Hasta que lo hagas, ese tipo de trabajo falla con un mensaje claro
- * ("handler no registrado todavía") en vez de romper el worker.
+ * Hasta que lo hagas, ese tipo de trabajo falla con un mensaje que se entiende
+ * («<la etapa>» no estuvo disponible…) en vez de romper el worker. Ver
+ * `HandlerNotRegisteredError`.
  *
  * ## Por qué se carga por tipo y no todo junto
  *
@@ -52,9 +53,13 @@ type ModuloDeHandlers = 'ingest' | 'analysis' | 'checks' | 'agent' | 'video' | '
  * cargaría su módulo y fallaría con "handler no registrado" sin que nadie
  * entienda por qué.
  *
- * `build_tutorials` todavía no tiene handler en ningún lado; apunta a `video`
- * porque es su dueño natural (escribe en `videos_caughtcode`, ver el comentario
- * de idempotencia de `registry.ts`). Mientras no exista, sigue siendo un stub.
+ * `build_tutorials` es una **capacidad declarada y todavía no construida**: no
+ * está rota, nunca se escribió (ver `CAPACIDADES_SIN_MOTOR` en `registry.ts`,
+ * que es donde está el detalle y lo que hay que tocar para construirla). Apunta
+ * a `video` porque es su dueño natural —escribiría en `videos_caughtcode`, ver
+ * el comentario de idempotencia de `registry.ts`—, pero ese módulo solo registra
+ * `generate_video`, así que mientras tanto sigue siendo un stub que falla al
+ * instante y no tiñe la revisión.
  */
 const MODULO_POR_KIND: Record<JobKind, ModuloDeHandlers> = {
   ingest_repo: 'ingest',

@@ -41,6 +41,13 @@ export function Progress({
       )}
 
       <div
+        // `<progress>` no sirve para esta barra. Es un elemento vacío: no puede
+        // contener el relleno que le da el color de gravedad ni la banda que
+        // barre en el modo indeterminado, y su pintado nativo casi no se puede
+        // estilar de forma pareja entre navegadores. Justo el modo sin `value`
+        // —el que más usamos, porque no mentimos con un porcentaje que no
+        // tenemos— es el que cada navegador dibuja a su manera.
+        // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role
         role="progressbar"
         aria-label={label ?? 'Progreso'}
         aria-valuemin={indeterminate ? undefined : 0}

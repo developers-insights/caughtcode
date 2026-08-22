@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { HandlerNotRegisteredError, isRetryable } from '@/server/jobs/errors'
 import {
+  CAPACIDADES_SIN_MOTOR,
   JOB_KINDS,
   JOB_KIND_LABEL,
   getHandler,
@@ -28,6 +29,10 @@ describe('catálogo de tipos de trabajo', () => {
     }
   })
 
+  it('las capacidades sin motor son tipos reales del catálogo', () => {
+    for (const kind of CAPACIDADES_SIN_MOTOR) expect(JOB_KINDS).toContain(kind)
+  })
+
   it('reconoce tipos válidos e inválidos', () => {
     expect(isJobKind('run_checks')).toBe(true)
     expect(isJobKind('hacer_magia')).toBe(false)
@@ -46,9 +51,22 @@ describe('stubs por defecto', () => {
     const error = await getHandler('run_checks')({}, ctx).catch((e) => e)
 
     expect(error).toBeInstanceOf(HandlerNotRegisteredError)
-    expect(error.message).toContain('handler no registrado todavía')
-    expect(error.message).toContain('run_checks')
+    // El mensaje termina en `jobs.last_error` y puede llegar a la pantalla: va
+    // con la etapa en castellano, sin jerga y sin el nombre interno del tipo.
+    expect(error.message).toContain(JOB_KIND_LABEL.run_checks)
+    expect(error.message).not.toMatch(/handler|stub|registrad|run_checks/i)
+    // Para el log y para filtrar, el tipo viaja aparte.
+    expect(error.kind).toBe('run_checks')
+    expect(error.code).toBe('handler_no_registrado')
     expect(isRetryable(error)).toBe(false)
+  })
+
+  it('una capacidad sin motor lo dice, en vez de fingir que algo se rompió', async () => {
+    const error = await getHandler('build_tutorials')({}, {} as any).catch((e) => e)
+
+    expect(error.code).toBe('capacidad_no_construida')
+    expect(error.message).toContain(JOB_KIND_LABEL.build_tutorials)
+    expect(error.message).toMatch(/no construida/i)
   })
 })
 

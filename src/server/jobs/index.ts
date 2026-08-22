@@ -63,6 +63,7 @@ export {
 } from './queue'
 
 export {
+  CAPACIDADES_SIN_MOTOR,
   JOB_KINDS,
   JOB_KIND_LABEL,
   defineHandler,
@@ -119,6 +120,16 @@ export {
   type OpcionesVencimiento,
   type ResultadoVencimiento,
 } from './encolados'
+
+export {
+  EDAD_MINIMA_MS,
+  INTERVALO_ENTRE_BARRIDAS_MS,
+  barrerCodigoHuerfano,
+  barrerCodigoHuerfanoSiToca,
+  reiniciarRelojDeLimpieza,
+  type InformeLimpieza,
+  type OpcionesLimpieza,
+} from './limpieza'
 
 export {
   HEARTBEAT_MS,

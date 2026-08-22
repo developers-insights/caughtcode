@@ -18,9 +18,28 @@ import { useRouter } from 'next/navigation'
 import { motion } from 'motion/react'
 import { Hourglass, RotateCcw, ScanSearch } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { Button, Callout, Card, CardBody, EmptyState, ErrorState, motionPresets } from '@/components/ui'
+import {
+  Button,
+  Callout,
+  Card,
+  CardBody,
+  ConfirmDialog,
+  EmptyState,
+  ErrorState,
+  motionPresets,
+} from '@/components/ui'
 import { startAuditAction } from '@/app/(app)/proyectos/nuevo/actions'
-import { ANTES_DE_REVISAR, CORTE } from './copy'
+import { estimarRevisionAction } from '@/app/(app)/proyectos/[id]/hallazgos/actions'
+import { traducirErrorTecnico, type ErrorLegible } from '@/content/lenguaje'
+import { ANTES_DE_REVISAR, CONFIRMAR_REVISION, CORTE } from './copy'
+import {
+  dialogoAbierto,
+  encolarSiSeConfirmoElPrecio,
+  puedeEncolar,
+  siguientePaso,
+  type PasoDeConfirmacion,
+} from './run-cost'
+import { TechnicalDetail } from './technical-detail'
 
 /* ── Arrancar la revisión ──────────────────────────────────────────────── */
 
@@ -30,14 +49,27 @@ interface BotonRevisarProps {
   variant?: 'primary' | 'secondary'
   size?: 'md' | 'lg'
   icon: ReactNode
+  /** Nunca se revisó este proyecto. Cambia el título del cartel, nada más. */
+  primeraVez?: boolean
+  /** Ya hay hallazgos en pantalla: esta corrida los reemplaza, y hay que decirlo. */
+  hayResultados?: boolean
   /** Dónde va el mensaje si el servidor no pudo arrancar. */
   onError: (mensaje: string | null) => void
 }
 
 /**
- * Pone la revisión en la cola.
+ * Pide la revisión — **después** de decir cuánto sale.
  *
- * Al volver no avisamos con un cartel flotante: pedimos la página de nuevo y
+ * Antes este botón encolaba la corrida en el mismo click, así que el usuario se
+ * enteraba del precio cuando ya lo había gastado. Eso viola la regla dura #3
+ * del producto y es, textualmente, la queja más repetida de la categoría.
+ *
+ * Ahora el click abre un cartel, el servidor saca la cuenta (los precios no
+ * bajan al navegador) y recién con el número en pantalla se habilita confirmar.
+ * Si la cuenta no sale, **no se encola igual**: preferimos hacer reintentar a
+ * alguien antes que cobrarle sin avisarle.
+ *
+ * Al encolar no avisamos con un cartel flotante: pedimos la página de nuevo y
  * la propia pantalla pasa a "está en la fila". El cambio de estado es la
  * confirmación, y a diferencia de un aviso que se va solo, queda.
  */
@@ -47,31 +79,158 @@ function BotonRevisar({
   variant = 'primary',
   size = 'lg',
   icon,
+  primeraVez = false,
+  hayResultados = false,
   onError,
 }: BotonRevisarProps) {
   const router = useRouter()
-  const [enMarcha, arrancar] = useTransition()
+  const [paso, setPaso] = useState<PasoDeConfirmacion>({ paso: 'cerrado' })
+  const [, arrancar] = useTransition()
+
+  function abrir() {
+    onError(null)
+    setPaso(siguientePaso(paso, { tipo: 'abrir' }))
+
+    void (async () => {
+      const resultado = await estimarRevisionAction({ projectId })
+      setPaso((actual) =>
+        resultado.ok
+          ? siguientePaso(actual, { tipo: 'presupuesto', presupuesto: resultado.presupuesto })
+          : siguientePaso(actual, {
+              tipo: 'sin-presupuesto',
+              mensaje: resultado.error,
+              detalle: resultado.detalle,
+            }),
+      )
+    })()
+  }
+
+  function confirmar() {
+    const actual = paso
+    // Doble llave: el diálogo ya bloquea el botón sin precio, y acá se vuelve a
+    // comprobar. La acción que cuesta plata no se llama desde ningún otro lado.
+    if (!puedeEncolar(actual)) return
+
+    setPaso(siguientePaso(actual, { tipo: 'confirmar' }))
+    arrancar(async () => {
+      const salida = await encolarSiSeConfirmoElPrecio(actual, () =>
+        startAuditAction({ projectId }),
+      )
+      setPaso(salida.paso)
+      if (salida.encolado) {
+        router.refresh()
+        return
+      }
+      onError(traducirErrorTecnico(salida.error)?.mensaje ?? CONFIRMAR_REVISION.noArranco)
+    })
+  }
+
+  const textos = primeraVez ? CONFIRMAR_REVISION.primeraVez : CONFIRMAR_REVISION.otraVez
 
   return (
-    <Button
-      variant={variant}
-      size={size}
-      icon={icon}
-      loading={enMarcha}
-      onClick={() => {
-        onError(null)
-        arrancar(async () => {
-          const resultado = await startAuditAction({ projectId })
-          if (!resultado.ok) {
-            onError(resultado.error ?? null)
-            return
-          }
-          router.refresh()
-        })
-      }}
-    >
-      {children}
-    </Button>
+    <>
+      <Button variant={variant} size={size} icon={icon} onClick={abrir}>
+        {children}
+      </Button>
+
+      <ConfirmDialog
+        open={dialogoAbierto(paso)}
+        onOpenChange={() => setPaso(siguientePaso(paso, { tipo: 'cerrar' }))}
+        title={textos.titulo}
+        consequences={[
+          ...CONFIRMAR_REVISION.consecuencias,
+          ...(hayResultados ? [CONFIRMAR_REVISION.consecuenciaReemplazo] : []),
+        ]}
+        cost={
+          paso.paso === 'listo' || paso.paso === 'encolando'
+            ? {
+                usd: paso.presupuesto.costUsd,
+                units: paso.presupuesto.unidades.join(' · '),
+                nota:
+                  paso.presupuesto.medido && paso.presupuesto.archivos !== null
+                    ? CONFIRMAR_REVISION.costo.medido(paso.presupuesto.archivos)
+                    : CONFIRMAR_REVISION.costo.sinMedir,
+              }
+            : undefined
+        }
+        costPending={paso.paso === 'calculando' ? CONFIRMAR_REVISION.costo.calculando : undefined}
+        costError={
+          paso.paso === 'sin-presupuesto' ? (
+            <>
+              <p className="font-semibold">{CONFIRMAR_REVISION.falla.titulo}</p>
+              <p>{paso.mensaje}</p>
+              <p>{CONFIRMAR_REVISION.falla.texto}</p>
+              <TechnicalDetail detalle={paso.detalle} className="pt-1" />
+            </>
+          ) : undefined
+        }
+        confirmLabel={textos.accion}
+        cancelLabel={CONFIRMAR_REVISION.cancelar}
+        loading={paso.paso === 'encolando'}
+        onConfirm={confirmar}
+      />
+    </>
+  )
+}
+
+/** Referencia estable: un JSX nuevo por render rompe la igualdad de props. */
+const ICONO_REHACER = <RotateCcw aria-hidden="true" strokeWidth={1.8} className="size-4" />
+
+export interface ReviewRunActionProps {
+  projectId: string
+  /** Rótulo del botón. Lo pone quien lo usa: no es lo mismo empezar que rehacer. */
+  children: string
+  variant?: 'primary' | 'secondary'
+  size?: 'md' | 'lg'
+  icon?: ReactNode
+  primeraVez?: boolean
+  hayResultados?: boolean
+  className?: string
+}
+
+/**
+ * El botón de revisar, para usar fuera de los estados de esta carpeta —hoy, el
+ * encabezado de la pantalla de hallazgos.
+ *
+ * Existe porque ese encabezado tenía un `<Link>` a `/proyectos/[id]`, y esa
+ * ruta redirige de vuelta a los hallazgos: el usuario lo apretaba y no pasaba
+ * nada. Un control que no hace nada es peor que no tenerlo — sobre todo en una
+ * app cuyo trabajo es marcarle ese defecto a los demás.
+ */
+export function ReviewRunAction({
+  projectId,
+  children,
+  variant = 'secondary',
+  size = 'md',
+  icon = ICONO_REHACER,
+  primeraVez = false,
+  hayResultados = false,
+  className,
+}: ReviewRunActionProps) {
+  const [fallo, setFallo] = useState<string | null>(null)
+
+  return (
+    <div className={cn('flex flex-col items-stretch gap-3 sm:items-end', className)}>
+      <BotonRevisar
+        projectId={projectId}
+        variant={variant}
+        size={size}
+        icon={icon}
+        primeraVez={primeraVez}
+        hayResultados={hayResultados}
+        onError={setFallo}
+      >
+        {children}
+      </BotonRevisar>
+      {/* El aviso va pegado al control que falló, no en un cartel flotante que
+          se va solo: es algo que el usuario tiene que leer y volver a intentar.
+          Acotado en ancho para no deformar el encabezado. */}
+      {fallo && (
+        <Callout tone="expuesto" className="max-w-sm text-left">
+          {fallo}
+        </Callout>
+      )}
+    </div>
   )
 }
 
@@ -96,6 +255,7 @@ export function ReviewRetryAction({ projectId, className }: ReviewRetryActionPro
         variant="secondary"
         size="md"
         icon={<RotateCcw strokeWidth={1.9} />}
+        hayResultados
         onError={setFallo}
       >
         {ANTES_DE_REVISAR.fallada.accion}
@@ -136,6 +296,7 @@ export function ReviewNotStarted({ projectId, className }: ReviewNotStartedProps
           <BotonRevisar
             projectId={projectId}
             icon={<ScanSearch strokeWidth={1.9} />}
+            primeraVez
             onError={setFallo}
           >
             {ANTES_DE_REVISAR.sinRevisar.accion}
@@ -171,7 +332,14 @@ export function ReviewQueued({ className }: ReviewQueuedProps) {
           >
             <Hourglass strokeWidth={1.7} className="size-5" />
           </span>
-          <div role="status" className="space-y-1">
+          <div
+            // `<output>` sería HTML inválido: solo admite contenido de frase y
+            // adentro va un `<h2>`. `role="status"` es además el idioma de
+            // región viva que usa toda la pantalla.
+            // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role
+            role="status"
+            className="space-y-1"
+          >
             <h2 className="text-base font-medium text-ink">{ANTES_DE_REVISAR.enCola.titulo}</h2>
             <p className="max-w-prose text-base leading-relaxed text-ink-muted">
               {ANTES_DE_REVISAR.enCola.texto}
@@ -187,8 +355,12 @@ export function ReviewQueued({ className }: ReviewQueuedProps) {
 
 export interface ReviewFailedProps {
   projectId: string
-  /** Lo que reportó el motor, tal cual. Sin esto el usuario no sabe qué pasó. */
-  motivo: string | null
+  /**
+   * Por qué se cortó, **ya traducido** (ver `traducirErrorTecnico`). El texto
+   * crudo del motor viaja en `motivo.detalle` y va plegado: sin esto el usuario
+   * no sabe qué pasó, pero con el original crudo tampoco.
+   */
+  motivo: ErrorLegible | null
   className?: string
 }
 
@@ -197,7 +369,9 @@ export interface ReviewFailedProps {
  *
  * El motivo va **a la vista**, no escondido en un desplegable: casi siempre es
  * algo que solo el usuario puede resolver (un repositorio privado, una
- * dirección que no responde). Esconderlo lo deja sin saber qué hacer.
+ * dirección que no responde). Esconderlo lo deja sin saber qué hacer. Lo que sí
+ * va plegado es el texto original del motor, que no le dice nada a nadie que no
+ * escriba código.
  */
 export function ReviewFailed({ projectId, motivo, className }: ReviewFailedProps) {
   const [fallo, setFallo] = useState<string | null>(null)
@@ -212,11 +386,12 @@ export function ReviewFailed({ projectId, motivo, className }: ReviewFailedProps
             {ANTES_DE_REVISAR.fallada.texto}
             {motivo && (
               <span className="mt-5 block rounded-md border border-expuesto-border bg-expuesto-soft px-4 py-3 text-left text-base leading-relaxed text-expuesto-text">
-                {motivo}
+                {motivo.mensaje}
               </span>
             )}
           </>
         }
+        detail={motivo?.detalle ?? undefined}
         action={
           <BotonRevisar
             projectId={projectId}

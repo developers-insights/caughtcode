@@ -199,6 +199,40 @@ describe('reconcileRunStatus', () => {
     expect(await pathExists(carpeta)).toBe(false)
   })
 
+  it('se borra el código, no el resultado: hallazgos e índice siguen ahí', async () => {
+    // Lo único que se va del disco es el código bajado. Lo que el usuario paga
+    // por ver —hallazgos, índice, videos— vive en la base y en Storage, y esta
+    // es la prueba de que el borrado no los roza.
+    const carpeta = workspacePathFor('proj-1', 'run-1')
+    await mkdir(path.join(carpeta, 'code'), { recursive: true })
+
+    sembrarCorrida()
+    sembrarCadena(
+      { kind: 'ingest_repo', status: 'succeeded' },
+      { kind: 'run_checks', status: 'succeeded' },
+    )
+    db.seed(T.findings, [
+      { id: 'f-1', analysis_run_id: 'run-1' },
+      { id: 'f-2', analysis_run_id: 'run-1' },
+    ])
+    db.seed(T.codeIndex, [{ id: 'c-1', analysis_run_id: 'run-1' }])
+    db.seed(T.videos, [{ id: 'v-1', finding_id: 'f-1' }])
+
+    await reconcileRunStatus('run-1')
+
+    expect(await pathExists(carpeta)).toBe(false)
+    expect(db.rows(T.findings)).toHaveLength(2)
+    expect(db.rows(T.codeIndex)).toHaveLength(1)
+    expect(db.rows(T.videos)).toHaveLength(1)
+    // Y ni siquiera se intentó escribir sobre ellos.
+    const tocadas = db.operations
+      .filter((op) => op.type !== 'select')
+      .map((op) => op.table)
+    expect(tocadas).not.toContain(T.findings)
+    expect(tocadas).not.toContain(T.codeIndex)
+    expect(tocadas).not.toContain(T.videos)
+  })
+
   it('no se borra el código que un trabajo todavía en vuelo va a necesitar', async () => {
     // `scan_comments` no compone la revisión —la corrida cierra igual— pero lee
     // `payload.repoPath`. Borrarle el código abajo sería romperlo.

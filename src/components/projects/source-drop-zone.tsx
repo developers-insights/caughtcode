@@ -42,7 +42,7 @@ export function SourceDropZone({ onFile, disabled, error }: SourceDropZoneProps)
     onFile(file)
   }
 
-  function onDrop(event: DragEvent<HTMLDivElement>) {
+  function onDrop(event: DragEvent<HTMLButtonElement>) {
     event.preventDefault()
     setDragging(false)
     if (disabled) return
@@ -53,19 +53,19 @@ export function SourceDropZone({ onFile, disabled, error }: SourceDropZoneProps)
 
   return (
     <div className="space-y-2">
-      <div
-        role="button"
-        tabIndex={disabled ? -1 : 0}
-        aria-disabled={disabled}
+      {/*
+        Un `<button>` de verdad y no un `<div role="button">`: el teclado, el
+        foco y el estado deshabilitado los maneja el navegador, así que se van
+        el `tabIndex` y el `onKeyDown` a mano. El `<input type="file">` queda
+        afuera como hermano — adentro era HTML inválido (un control
+        interactivo no puede vivir dentro de un botón) y algunos lectores de
+        pantalla lo anunciaban dos veces.
+      */}
+      <button
+        type="button"
+        disabled={disabled}
         aria-describedby={mensaje ? `${id}-error` : undefined}
         onClick={() => !disabled && inputRef.current?.click()}
-        onKeyDown={(event) => {
-          if (disabled) return
-          if (event.key === 'Enter' || event.key === ' ') {
-            event.preventDefault()
-            inputRef.current?.click()
-          }
-        }}
         onDragOver={(event) => {
           event.preventDefault()
           if (!disabled) setDragging(true)
@@ -73,7 +73,7 @@ export function SourceDropZone({ onFile, disabled, error }: SourceDropZoneProps)
         onDragLeave={() => setDragging(false)}
         onDrop={onDrop}
         className={cn(
-          'flex cursor-pointer flex-col items-center justify-center gap-3 rounded-lg border-2 border-dashed px-6 py-10 text-center',
+          'flex w-full cursor-pointer flex-col items-center justify-center gap-3 rounded-lg border-2 border-dashed px-6 py-10 text-center',
           'transition-colors duration-150 ease-firm focus-visible:focus-ring',
           disabled && 'pointer-events-none cursor-not-allowed opacity-60',
           dragging ? 'border-ink bg-canvas-sunken' : 'border-line-strong hover:border-ink-subtle',
@@ -90,15 +90,16 @@ export function SourceDropZone({ onFile, disabled, error }: SourceDropZoneProps)
           <p className="text-base font-medium text-ink">Arrastrá tu .zip acá</p>
           <p className="mt-1 text-sm text-ink-muted">o hacé clic para elegirlo</p>
         </div>
-        <input
-          ref={inputRef}
-          type="file"
-          accept=".zip,application/zip"
-          className="sr-only"
-          disabled={disabled}
-          onChange={(event) => handleFile(event.target.files?.[0])}
-        />
-      </div>
+      </button>
+
+      <input
+        ref={inputRef}
+        type="file"
+        accept=".zip,application/zip"
+        className="sr-only"
+        disabled={disabled}
+        onChange={(event) => handleFile(event.target.files?.[0])}
+      />
 
       {mensaje && (
         <p id={`${id}-error`} role="alert" className="text-sm text-expuesto-text">

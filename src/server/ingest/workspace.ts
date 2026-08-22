@@ -25,11 +25,22 @@ export function storageRoot(): string {
 }
 
 /**
+ * `true` si el nombre es exactamente como lo escribiríamos nosotros en disco.
+ *
+ * Lo usa la limpieza (`src/server/jobs/limpieza.ts`) para no tocar nada que no
+ * haya salido de acá: si alguien montó otra cosa bajo la misma raíz, su carpeta
+ * no pasa este filtro y no se borra.
+ */
+export function esSegmentoSeguro(value: string): boolean {
+  return /^[A-Za-z0-9._-]{1,64}$/.test(value) && value !== '.' && value !== '..'
+}
+
+/**
  * Los ids vienen de la base (uuid), pero nunca confiamos en que sea así:
  * cualquier cosa rara se reduce a un hash y no puede escaparse de la raíz.
  */
 function safeSegment(value: string): string {
-  if (/^[A-Za-z0-9._-]{1,64}$/.test(value) && value !== '.' && value !== '..') return value
+  if (esSegmentoSeguro(value)) return value
   return createHash('sha256').update(value).digest('hex').slice(0, 32)
 }
 

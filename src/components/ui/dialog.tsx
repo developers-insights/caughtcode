@@ -149,6 +149,15 @@ export function Dialog({
 
           <motion.div
             ref={panel}
+            // `<dialog>` no entra acá. El elemento nativo solo es modal si se
+            // abre por `showModal()` —imperativo, incompatible con el montaje
+            // declarativo de `AnimatePresence`— y al cerrarse sale de la capa
+            // superior de inmediato, que se come la animación de salida. Encima
+            // trae su propio `::backdrop`, y el velo de acá es un elemento
+            // aparte que se anima y se puede clickear para cerrar: serían dos
+            // fondos superpuestos. El foco, el `Escape` y el bloqueo del scroll
+            // ya están resueltos arriba en este mismo componente.
+            // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role
             role="dialog"
             aria-modal="true"
             aria-labelledby={titleId}

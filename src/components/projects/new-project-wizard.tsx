@@ -20,7 +20,6 @@ import {
   notify,
 } from '@/components/ui'
 import { ONBOARDING, COSTO } from '@/content/copy'
-import { formatUsd } from '@/lib/utils'
 import { SourceDropZone } from './source-drop-zone'
 import { frameworkLabel } from './stack-label'
 import {
@@ -158,10 +157,17 @@ export function NewProjectWizard({ githubStatus }: { githubStatus: GithubStatusR
   // Valida en vivo con el mismo parser que usa el alta real (`parseGithubUrl`,
   // vía server action: es server-only, no se puede importar acá) — así no
   // dejamos que el usuario mande una dirección que ya sabemos que va a fallar.
+  //
+  // Los dos `set*` de adentro están suprimidos a propósito: apenas el usuario
+  // toca la dirección, el veredicto anterior deja de valer y hay que limpiarlo
+  // antes de que salga la consulta nueva. Derivarlo durante el render dejaría
+  // un "es válida" viejo a la vista mientras se escribe la siguiente.
   useEffect(() => {
     const value = repoUrl.trim()
     repoUrlRef.current = value
+    // oxlint-disable-next-line react/set-state-in-effect
     setRepoPublico(null)
+    // oxlint-disable-next-line react/set-state-in-effect
     setRepoUrlInvalido(false)
     if (!value) return
 
@@ -315,6 +321,7 @@ export function NewProjectWizard({ githubStatus }: { githubStatus: GithubStatusR
           type="button"
           onClick={() => setFuente('publico')}
           aria-pressed={fuente === 'publico'}
+          aria-label={ONBOARDING.fuentes.publico.titulo}
           className="text-left focus-visible:focus-ring rounded-lg"
         >
           <Card
@@ -336,6 +343,7 @@ export function NewProjectWizard({ githubStatus }: { githubStatus: GithubStatusR
           type="button"
           onClick={() => setFuente('github')}
           aria-pressed={fuente === 'github'}
+          aria-label={ONBOARDING.fuentes.github.titulo}
           className="text-left focus-visible:focus-ring rounded-lg"
         >
           <Card
@@ -357,6 +365,7 @@ export function NewProjectWizard({ githubStatus }: { githubStatus: GithubStatusR
           type="button"
           onClick={() => setFuente('zip')}
           aria-pressed={fuente === 'zip'}
+          aria-label={ONBOARDING.fuentes.zip.titulo}
           className="text-left focus-visible:focus-ring rounded-lg"
         >
           <Card

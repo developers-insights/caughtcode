@@ -122,9 +122,32 @@ export function FindingsBoard({
   const [run, setRun] = useState<RunView | null>(runInicial)
   const [desconectado, setDesconectado] = useState(false)
 
-  // El servidor manda la verdad cuando la página se vuelve a armar.
-  useEffect(() => setFindings(findingsIniciales), [findingsIniciales])
-  useEffect(() => setRun(runInicial), [runInicial])
+  /*
+   * El servidor manda la verdad cuando la página se vuelve a armar.
+   *
+   * Se re-siembra durante el render y no en un `useEffect`. Con el efecto, la
+   * pantalla llegaba a pintar una vez con la lista vieja y recién en el pintado
+   * siguiente aparecía la nueva: después de `router.refresh()` se veía un
+   * parpadeo con datos que ya no valían. Ajustar el estado en el render es el
+   * camino que la documentación de React marca para esto — React descarta el
+   * render en curso y rehace este componente antes de tocar el DOM, así que el
+   * usuario nunca ve el estado intermedio.
+   *
+   * Van por separado, uno por prop, a propósito: si se re-sembraran juntos, un
+   * cambio en la corrida pisaría los hallazgos que llegaron en vivo y todavía
+   * no están en el payload del servidor.
+   */
+  const [semillaFindings, setSemillaFindings] = useState(findingsIniciales)
+  if (semillaFindings !== findingsIniciales) {
+    setSemillaFindings(findingsIniciales)
+    setFindings(findingsIniciales)
+  }
+
+  const [semillaRun, setSemillaRun] = useState(runInicial)
+  if (semillaRun !== runInicial) {
+    setSemillaRun(runInicial)
+    setRun(runInicial)
+  }
 
   const corriendo = estaCorriendo(run)
   const estado = useMemo(

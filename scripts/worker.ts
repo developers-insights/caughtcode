@@ -116,6 +116,43 @@ function checkEnvironment(): string[] {
   return required.filter((key) => !process.env[key])
 }
 
+/**
+ * Variables que no impiden arrancar pero sí dejan tipos de trabajo inservibles.
+ *
+ * Sin esto el worker levanta diciendo "arriba", toma el primer trabajo y recién
+ * ahí falla — con un error que llega a la pantalla del usuario en vez de a los
+ * ojos de quien configuró el servicio. `src/lib/env.ts` las pide de forma
+ * perezosa (`required()` dentro de cada getter), así que el momento de
+ * enterarse es este, no el del primer trabajo.
+ */
+function checkOptionalEnvironment(): string[] {
+  const avisos: string[] = []
+  if (!process.env.ANTHROPIC_API_KEY) {
+    avisos.push('ANTHROPIC_API_KEY — sin ella fallan el agente navegador, el guion de video y el resumen del análisis.')
+  }
+  if (!process.env.ENCRYPTION_KEY) {
+    avisos.push('ENCRYPTION_KEY — sin ella no se pueden descifrar las credenciales guardadas (repos privados, base del usuario). Tiene que ser idéntica a la de la app.')
+  }
+  const tts = process.env.TTS_PROVIDER ?? 'azure'
+  if (tts === 'azure' && !process.env.AZURE_SPEECH_KEY) {
+    avisos.push('AZURE_SPEECH_KEY — los videos salen sin narración, solo con subtítulos.')
+  }
+  return avisos
+}
+
+/**
+ * ¿Estamos en un entorno gestionado, donde las variables se cargan en un panel
+ * y no en un archivo? Sirve solo para decir la verdad en el mensaje de error:
+ * mandar a alguien a editar `.env.local` dentro de un contenedor de Railway es
+ * mandarlo a un archivo que no existe y que no sobreviviría al próximo deploy.
+ */
+function entornoGestionado(): string | null {
+  if (process.env.RAILWAY_ENVIRONMENT_NAME || process.env.RAILWAY_SERVICE_NAME) return 'Railway'
+  if (process.env.RENDER) return 'Render'
+  if (process.env.VERCEL) return 'Vercel'
+  return null
+}
+
 /* ── Loop principal ──────────────────────────────────────────────────── */
 
 async function main(): Promise<void> {
@@ -127,11 +164,16 @@ async function main(): Promise<void> {
   const config = readConfig()
   const missing = checkEnvironment()
   if (missing.length > 0) {
-    console.error(
-      `\nNo puedo arrancar: falta configurar ${missing.join(' y ')}.\n` +
-        'Completá esas variables en .env.local (mirá .env.example) y volvé a correr `pnpm worker`.\n',
-    )
+    const gestionado = entornoGestionado()
+    const dónde = gestionado
+      ? `Cargalas en las variables de entorno del servicio en ${gestionado} y volvé a desplegar.`
+      : 'Completá esas variables en .env.local (mirá .env.example) y volvé a correr `pnpm worker`.'
+    console.error(`\nNo puedo arrancar: falta configurar ${missing.join(' y ')}.\n${dónde}\n`)
     process.exit(1)
+  }
+
+  for (const aviso of checkOptionalEnvironment()) {
+    console.warn(`  aviso: falta ${aviso}`)
   }
 
   await registerAllHandlers()
@@ -225,6 +267,10 @@ async function main(): Promise<void> {
     log(`No se pudieron recuperar trabajos vencidos al arrancar: ${describeError(error)}`)
   }
 
+  // `running` no se toca acá adentro a propósito: lo baja el manejador de
+  // SIGTERM/SIGINT, que es como Railway pide el apagado. El linter no ve esa
+  // escritura y cree que el loop es infinito.
+  // oxlint-disable-next-line no-unmodified-loop-condition
   while (running) {
     if (limit.activeCount + limit.pendingCount >= config.concurrency) {
       await sleep(150)
